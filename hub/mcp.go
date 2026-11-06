@@ -154,9 +154,22 @@ func mcpTools() []map[string]any {
 		},
 		{
 			"name":        "bridge_clipboard",
-			"description": "Get or set a device's clipboard text. Omit 'text' to read; provide 'text' to set.",
+			"description": "Get or set a device's clipboard text. Omit 'text' to read; provide 'text' to set (device 'all' sets it on every PC and phone). history=true lists the fleet's recent clipboard items (newest first).",
 			"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
 				"device": dev, "text": map[string]any{"type": "string"},
+				"history": map[string]any{"type": "boolean", "description": "Return the shared clipboard history instead."},
+			}},
+		},
+		{
+			"name":        "bridge_phone",
+			"description": "Use a linked Android phone's calls and texts. action: 'sms_threads' (list conversations), 'sms_read' (messages of a thread or number), 'sms_send' (text someone), 'whatsapp_send' (send a WhatsApp message to a number), 'call_dial' (place a call — audio stays on the phone), 'call_answer', 'call_end', 'call_log'. Always confirm the recipient and text with the user before sending or calling.",
+			"inputSchema": map[string]any{"type": "object", "required": []string{"action"}, "properties": map[string]any{
+				"device": map[string]any{"type": "string", "description": "Phone id or name (defaults to the first online phone)."},
+				"action": map[string]any{"type": "string", "enum": []string{"sms_threads", "sms_read", "sms_send", "whatsapp_send", "call_dial", "call_answer", "call_end", "call_log"}},
+				"to":     map[string]any{"type": "string", "description": "Phone number for sms_send / whatsapp_send / call_dial (include the country code for WhatsApp)."},
+				"text":   map[string]any{"type": "string", "description": "Message text."},
+				"thread": map[string]any{"type": "integer", "description": "SMS thread id for sms_read (from sms_threads)."},
+				"limit":  map[string]any{"type": "integer"},
 			}},
 		},
 		{
@@ -360,7 +373,59 @@ func (s *Server) mcpCallTool(ctx context.Context, req mcpReq) any {
 		}
 		return textResult("ok")
 
+	case "bridge_phone":
+		phone := str("device")
+		if phone == "" {
+			for _, d := range s.hub.List() {
+				if d.Kind == "android" && d.Online {
+					phone = d.ID
+					break
+				}
+			}
+			if phone == "" {
+				return fail(fmt.Errorf("no phone is online — open BridgeDesk on the phone and turn on Share this phone"))
+			}
+		}
+		var method string
+		params := map[string]any{"limit": intArg(args, "limit")}
+		switch str("action") {
+		case "sms_threads":
+			method = "sms.threads"
+		case "sms_read":
+			method = "sms.messages"
+			params["thread"] = intArg(args, "thread")
+			params["address"] = str("to")
+		case "sms_send":
+			method, params = "sms.send", map[string]any{"to": str("to"), "text": str("text")}
+		case "whatsapp_send":
+			method, params = "whatsapp.send", map[string]any{"to": str("to"), "text": str("text")}
+		case "call_dial":
+			method, params = "call.dial", map[string]any{"number": str("to")}
+		case "call_answer":
+			method, params = "call.answer", nil
+		case "call_end":
+			method, params = "call.end", nil
+		case "call_log":
+			method = "call.log"
+		default:
+			return fail(fmt.Errorf("unknown action %q", str("action")))
+		}
+		var out json.RawMessage
+		if err := s.hub.Call(ctx, phone, method, params, &out); err != nil {
+			return fail(err)
+		}
+		return textResult(string(out))
+
 	case "bridge_clipboard":
+		if h, _ := args["history"].(bool); h {
+			return jsonResult(s.clip.History())
+		}
+		if t, ok := args["text"].(string); ok && (dev == "all") {
+			if err := s.clipTo(ctx, "all", t); err != nil {
+				return fail(err)
+			}
+			return textResult("clipboard set on every device")
+		}
 		if t, ok := args["text"].(string); ok {
 			if err := s.hub.Call(ctx, dev, "clipboard.set", map[string]any{"text": t}, nil); err != nil {
 				return fail(err)

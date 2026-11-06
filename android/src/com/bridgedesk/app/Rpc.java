@@ -84,6 +84,16 @@ public class Rpc {
                 return ns.dismiss(p.optString("key"));
             }
             case "sys.open": return Boolean.TRUE;
+            // ---- calls & SMS & WhatsApp ----
+            case "phone.status": return PhoneBridge.status(svc);
+            case "sms.threads": { needPhone(st); return PhoneBridge.threads(svc, p.optInt("limit", 60)); }
+            case "sms.messages": { needPhone(st); return PhoneBridge.messages(svc, p.optLong("thread", 0), p.optString("address", ""), p.optInt("limit", 80)); }
+            case "sms.send": { needPhone(st); return PhoneBridge.sendSms(svc, p.optString("to"), p.optString("text")); }
+            case "call.answer": { needPhone(st); return PhoneBridge.answer(svc); }
+            case "call.end": { needPhone(st); return PhoneBridge.end(svc); }
+            case "call.dial": { needPhone(st); return PhoneBridge.dial(svc, p.optString("number")); }
+            case "call.log": { needPhone(st); return PhoneBridge.callLog(svc, p.optInt("limit", 60)); }
+            case "whatsapp.send": { needPhone(st); return PhoneBridge.whatsappSend(svc, p.optString("to"), p.optString("text"), p.optBoolean("business", false)); }
         }
         throw new Exception("unknown method: " + method);
     }
@@ -303,7 +313,14 @@ public class Rpc {
         return o;
     }
 
+    static volatile String lastClip;
+
+    private static void needPhone(Store st) throws Exception {
+        if (!st.allowPhone()) throw new Exception("calls & SMS are turned off on the phone (BridgeDesk → Phone access)");
+    }
+
     static Object clipboardSet(Context c, String text) throws Exception {
+        lastClip = text;
         runOnMain(c, () -> {
             ClipboardManager cm = (ClipboardManager) c.getSystemService(Context.CLIPBOARD_SERVICE);
             if (cm != null) cm.setPrimaryClip(ClipData.newPlainText("BridgeDesk", text));

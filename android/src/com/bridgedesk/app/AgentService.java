@@ -31,6 +31,7 @@ public class AgentService extends Service {
     private Store store;
     private WsClient ws;
     private ScreenCapture capture;
+    private PhoneBridge phone;
     private final ExecutorService pool = Executors.newCachedThreadPool();
     private volatile boolean wantRun = false;
     private Handler main;
@@ -43,6 +44,8 @@ public class AgentService extends Service {
         instance = this;
         store = new Store(this);
         capture = new ScreenCapture(this);
+        phone = new PhoneBridge(this);
+        phone.start();
         main = new Handler(Looper.getMainLooper());
         createChannel();
     }
@@ -112,6 +115,8 @@ public class AgentService extends Service {
         if (store.allowControl()) { caps.put("screen"); caps.put("input"); }
         if (store.allowNotifications() && NotificationService.isEnabled(this)) caps.put("notifications");
         caps.put("clipboard");
+        if (store.allowClipSync()) caps.put("clipsync");
+        if (store.allowPhone() && PhoneBridge.anyGranted(this)) caps.put("phone");
         info.put("caps", caps);
         JSONObject root = new JSONObject();
         root.put("hello", info);
@@ -195,6 +200,7 @@ public class AgentService extends Service {
         wantRun = false;
         store.setAgentEnabled(false);
         stopEverything();
+        if (phone != null) phone.stop();
         instance = null;
         super.onDestroy();
     }
@@ -213,11 +219,14 @@ public class AgentService extends Service {
         PendingIntent pi = PendingIntent.getActivity(this, 0, open, PendingIntent.FLAG_IMMUTABLE);
         Intent stop = new Intent(this, AgentService.class).setAction(ACTION_STOP);
         PendingIntent sp = PendingIntent.getService(this, 1, stop, PendingIntent.FLAG_IMMUTABLE);
+        Intent clip = new Intent(this, ClipSendActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        PendingIntent cp = PendingIntent.getActivity(this, 2, clip, PendingIntent.FLAG_IMMUTABLE);
         return new Notification.Builder(this, CHAN)
                 .setContentTitle("BridgeDesk")
                 .setContentText(text)
                 .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
                 .setContentIntent(pi)
+                .addAction(new Notification.Action.Builder(null, "Send clipboard to PC", cp).build())
                 .addAction(new Notification.Action.Builder(null, "Stop", sp).build())
                 .setOngoing(true)
                 .build();

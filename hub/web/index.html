@@ -108,6 +108,14 @@
           <button id="clipPush" class="primary">⬆ Push to device</button>
         </div>
         <textarea id="clipText" placeholder="Clipboard text…"></textarea>
+        <div class="row"><button id="clipAll">⇪ Send to every device</button></div>
+        <div class="clip-opts">
+          <label><input type="checkbox" id="clipSync"> Keep all my PCs and phones on the same clipboard (copy on one, paste on any)</label>
+          <label id="clipWinWrap" hidden><input type="checkbox" id="clipWin"> Windows clipboard history — every synced item also appears in <b>Win+V</b></label>
+          <div class="hint">Phones: PC → phone is automatic. Phone → PC: tap <b>Send clipboard to PC</b> on BridgeDesk's notification, use Share → <b>Send to PC</b>, or open BridgeDesk (Android only lets the app on screen read the clipboard). Passwords copied from password managers are never synced.</div>
+        </div>
+        <div class="row" style="justify-content:space-between;margin-top:14px"><h3 style="margin:0">Recent clipboard</h3><button id="clipClear">Clear</button></div>
+        <div id="clipHist"></div>
       </div>
     </div>
 
@@ -138,6 +146,30 @@
         <div class="row" style="align-items:flex-start"><span class="hint" style="min-width:120px">Muted apps</span><div id="nMuted" class="chips"></div></div>
       </div>
       <div class="pad" style="flex:1"><div id="notifList"></div></div>
+    </div>
+
+    <!-- Phone: calls, SMS, WhatsApp -->
+    <div class="page" data-page="phone">
+      <div class="toolbar">
+        <select id="phDev" title="Phone" hidden></select>
+        <div class="seg"><button id="phTabMsg" class="on">💬 Messages</button><button id="phTabCalls">📞 Calls</button></div>
+        <span class="grow hint" id="phHint"></span>
+        <button id="phNew" class="primary">✎ New message</button>
+        <button id="phRefresh" class="icon" title="Refresh">&#10227;</button>
+      </div>
+      <div id="phMsgView" class="ph-split">
+        <div id="phThreads" class="ph-list"></div>
+        <div class="ph-convo">
+          <div id="phConvoHead" class="ph-head"></div>
+          <div id="phBubbles" class="ph-bubbles"></div>
+          <div id="phCompose" class="ph-compose" hidden><textarea id="phText" rows="1" placeholder="Text message"></textarea><button id="phSend" class="primary">Send</button></div>
+        </div>
+      </div>
+      <div id="phCallView" class="pad" hidden>
+        <div class="row ph-dial"><input id="phNumber" type="tel" placeholder="Phone number"><button id="phCall" class="primary">📞 Call</button><button id="phSmsTo">💬 Text</button></div>
+        <div class="hint" style="margin:6px 0 12px">Calls ring and are answered on the phone — talk through the phone or its Bluetooth headset.</div>
+        <div id="phCallLog"></div>
+      </div>
     </div>
 
     <!-- Devices -->
@@ -186,6 +218,7 @@
   </div>
 </div>
 
+<div id="callBanner" hidden></div>
 <div id="toast"></div>
 
 <!-- Add-device pairing dialog -->

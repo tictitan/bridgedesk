@@ -46,6 +46,7 @@ type Config struct {
 	AllowFiles    bool         `json:"allowFiles"`
 	AllowMCP      bool         `json:"allowMcp"`
 	MirrorNotif   bool         `json:"mirrorNotif"`   // raise a desktop toast when a linked phone notification arrives
+	ClipSyncOff   bool         `json:"clipSyncOff"`   // stop keeping every device on the same clipboard
 	AutoCopyCodes bool         `json:"autoCopyCodes"` // copy one-time codes from phone notifications to this PC's clipboard
 	MutedApps     []string     `json:"mutedApps"`     // apps (package or name) that never toast/forward
 	NotifWebhook  string       `json:"notifWebhook"`  // POST each (non-code) notification here: Slack/Discord/Teams/any JSON

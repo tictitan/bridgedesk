@@ -106,6 +106,15 @@ func doMouse(MouseInput) error        { return fmt.Errorf("input not supported o
 func doKeyCombo(string, string) error { return fmt.Errorf("input not supported on %s", runtime.GOOS) }
 func typeText(string) error           { return fmt.Errorf("input not supported on %s", runtime.GOOS) }
 
+// clipboardSeq: no cheap change counter here; the watcher polls the text instead.
+func clipboardSeq() uint32 { return 0 }
+
+func clipboardPrivate() bool { return false }
+
+func winClipHistory() (supported, on bool) { return false, false }
+
+func setWinClipHistory(bool) error { return fmt.Errorf("clipboard history is a Windows feature") }
+
 func clipboardGet() (string, error) {
 	for _, c := range [][]string{{"pbpaste"}, {"xclip", "-selection", "clipboard", "-o"}, {"xsel", "-b"}, {"wl-paste"}} {
 		if _, err := exec.LookPath(c[0]); err == nil {

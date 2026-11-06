@@ -140,6 +140,7 @@ const NAV = [
   ["files", "Files", '<path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z" fill="none" stroke="currentColor" stroke-width="2"/>'],
   ["desktop", "Desktop", '<rect x="3" y="4" width="18" height="12" rx="1.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9 20h6M12 16v4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>'],
   ["clip", "Clipboard", '<rect x="6" y="4" width="12" height="17" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><rect x="9" y="2.5" width="6" height="3.5" rx="1" fill="currentColor"/>'],
+  ["phone", "Phone", '<path d="M5 3h4l2 5-2.5 1.5a11 11 0 005 5L15 12l5 2v4a2 2 0 01-2 2A16 16 0 013 5a2 2 0 012-2z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>'],
   ["notif", "Alerts", '<path d="M6 9a6 6 0 0112 0c0 5 2 6 2 6H4s2-1 2-6z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M10 19a2 2 0 004 0" fill="none" stroke="currentColor" stroke-width="2"/>'],
   ["devices", "Devices", '<rect x="3" y="5" width="12" height="9" rx="1" fill="none" stroke="currentColor" stroke-width="2"/><rect x="16" y="8" width="5" height="11" rx="1" fill="none" stroke="currentColor" stroke-width="2"/>'],
   ["settings", "Settings", '<circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>'],
@@ -161,6 +162,8 @@ function go(id) {
   if (id === "term") Term.enter();
   if (id === "devices") renderDevices();
   if (id === "notif") Notif.enter();
+  if (id === "phone") Phone.enter();
+  if (id === "clip") Clip.enter();
   if (id === "settings") Settings.load();
   if (id !== "desktop") Desktop.stop();
 }
@@ -657,6 +660,8 @@ const Notif = {
   async refreshBadge() { try { const r = await (await api("/api/notifications?limit=1")).json(); this.applySummary(r.summary || {}); } catch (e) {} },
   onAlertsPage() { const p = $(".page[data-page=notif]"); return p && p.classList.contains("active"); },
   onPush(m) {
+    if (m.event === "call.state" || m.event === "sms.received") { Phone.onEvent(m); return; }
+    if (m.event === "clip.added") { Clip.onAdded(m); return; }
     const n = m.params || {};
     if (m.event === "notif.posted") {
       if (!n.muted) {
@@ -846,6 +851,277 @@ function copyText(t, msg) {
 function bindClipboard() {
   $("#clipPull").onclick = async () => { try { const r = await rpc("clipboard.get"); $("#clipText").value = r.text || ""; toast("Pulled clipboard"); } catch (e) { toast(e.message, true); } };
   $("#clipPush").onclick = async () => { try { await rpc("clipboard.set", { text: $("#clipText").value }); toast("Pushed to device clipboard"); } catch (e) { toast(e.message, true); } };
+}
+
+/* ---------- Phone: calls, SMS, WhatsApp ---------- */
+const Phone = {
+  view: "msg", dev: null, threads: [], cur: null, sentWa: {}, call: null, reloadT: null,
+  phones() { return App.devices.filter((d) => d.kind === "android" && d.online); },
+  phone() { const ps = this.phones(); return ps.find((p) => p.id === this.dev) || ps[0] || null; },
+  bind() {
+    $("#phTabMsg").onclick = () => this.show("msg");
+    $("#phTabCalls").onclick = () => this.show("calls");
+    $("#phRefresh").onclick = () => this.enter();
+    $("#phDev").onchange = (e) => { this.dev = e.target.value; this.cur = null; this.enter(); };
+    $("#phNew").onclick = () => this.openNew();
+    $("#phSend").onclick = () => this.send();
+    $("#phText").onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); this.send(); } };
+    $("#phText").oninput = (e) => { e.target.style.height = "auto"; e.target.style.height = Math.min(140, e.target.scrollHeight) + "px"; };
+    $("#phCall").onclick = () => this.dial($("#phNumber").value);
+    $("#phSmsTo").onclick = () => { const n = $("#phNumber").value.trim(); if (!n) return; this.show("msg"); this.openNew(n); };
+    $("#phNumber").onkeydown = (e) => { if (e.key === "Enter") this.dial($("#phNumber").value); };
+  },
+  rpc(method, params) { const p = this.phone(); if (!p) return Promise.reject(new Error("No phone is connected")); return rpc(method, params || {}, p.id); },
+  show(v) {
+    this.view = v;
+    $("#phTabMsg").classList.toggle("on", v === "msg"); $("#phTabCalls").classList.toggle("on", v === "calls");
+    $("#phMsgView").hidden = v !== "msg"; $("#phCallView").hidden = v !== "calls"; $("#phNew").hidden = v !== "msg";
+    if (v === "calls") this.loadCalls(); else this.loadThreads();
+  },
+  async enter() {
+    const ps = this.phones(); const sel = $("#phDev");
+    sel.innerHTML = ps.map((p) => `<option value="${esc(p.id)}">📱 ${esc(p.name)}</option>`).join("");
+    sel.hidden = ps.length < 2; if (this.phone()) sel.value = this.phone().id;
+    if (!ps.length) {
+      $("#phThreads").innerHTML = ""; $("#phConvoHead").innerHTML = ""; $("#phCompose").hidden = true;
+      $("#phBubbles").innerHTML = `<div class="card ph-empty"><p>No phone is connected.</p><p class="hint">On the phone: BridgeDesk → <b>Phone access</b> → <b>Share this phone</b>, then <b>Calls &amp; SMS → Grant</b> and <b>Mirror notifications</b> (for WhatsApp).</p></div>`;
+      return;
+    }
+    this.show(this.view);
+  },
+  needHelp(e) {
+    return `<div class="card ph-empty"><p>${esc(e.message)}</p><p class="hint">On the phone: BridgeDesk → <b>Phone access</b> → <b>Calls &amp; SMS → Grant</b>. If Android refuses, open the BridgeDesk app info → ⋮ → <b>Allow restricted settings</b>, then grant again.</p></div>`;
+  },
+  // ---- conversations: SMS threads + WhatsApp chats rebuilt from notifications ----
+  async loadThreads() {
+    const list = $("#phThreads"); if (!this.threads.length) list.innerHTML = '<div class="hint pad">loading…</div>';
+    let sms = [], smsErr = null, wa = [];
+    await Promise.all([
+      this.rpc("sms.threads", { limit: 80 }).then((r) => { sms = r.threads || []; }).catch((e) => { smsErr = e; }),
+      api("/api/notifications?limit=500&q=").then((r) => r.json()).then((r) => { wa = (r.notifications || []).filter((n) => /^com\.whatsapp(\.w4b)?$/.test(n.pkg) || /^WhatsApp/i.test(n.app)); }).catch(() => {}),
+    ]);
+    const chats = new Map();
+    for (const n of wa) {
+      const title = (n.title || "").replace(/\s*\(\d+ (messages|messaggi|mensajes)\)$/i, "").trim();
+      if (!title || /^WhatsApp$/i.test(title) || n.category === "call") continue;
+      const id = "wa:" + title;
+      if (!chats.has(id)) chats.set(id, { id, kind: "wa", name: title, items: [], time: 0, unread: 0, pkg: n.pkg });
+      const c = chats.get(id); c.items.push(n);
+      if ((n.time || 0) > c.time) { c.time = n.time || 0; c.snippet = lastLine(n.text); }
+      if (!n.read) c.unread++;
+      if (n.active && (n.actions || []).some((a) => a.reply)) c.live = c.live && c.live.time > n.time ? c.live : n;
+    }
+    const threads = sms.map((t) => ({ id: "sms:" + t.thread, kind: "sms", thread: t.thread, address: t.address, name: t.name || t.address, snippet: (t.outgoing ? "You: " : "") + t.snippet, time: t.time, unread: t.unread }))
+      .concat([...chats.values()]);
+    threads.sort((a, b) => (b.time || 0) - (a.time || 0));
+    this.threads = threads; this.smsErr = smsErr;
+    this.renderThreads();
+    if (this.cur) { const again = threads.find((t) => t.id === this.cur.id); if (again) { this.cur = again; this.renderConvo(); } }
+    else if (!$("#phBubbles").children.length || $("#phBubbles .ph-empty")) {
+      $("#phConvoHead").innerHTML = ""; $("#phCompose").hidden = true;
+      $("#phBubbles").innerHTML = smsErr ? this.needHelp(smsErr) : '<div class="ph-placeholder hint">Pick a conversation, or start a new message.</div>';
+    }
+  },
+  renderThreads() {
+    const list = $("#phThreads"); list.innerHTML = "";
+    if (this.smsErr) { const w = document.createElement("div"); w.className = "ph-warn hint"; w.textContent = "SMS: " + this.smsErr.message; list.appendChild(w); }
+    if (!this.threads.length) { list.insertAdjacentHTML("beforeend", '<div class="hint pad">No conversations yet.</div>'); return; }
+    for (const t of this.threads) {
+      const row = document.createElement("div"); row.className = "ph-thread" + (this.cur && this.cur.id === t.id ? " on" : "");
+      row.innerHTML = `<div class="notif-av" style="background:${avatarColor(t.name || "?")}">${esc(((t.name || "?").trim()[0] || "?").toUpperCase())}</div>
+        <div class="ph-tmain"><div class="ph-trow"><span class="ph-tname">${esc(t.name)}</span><span class="ph-src ${t.kind}">${t.kind === "wa" ? "WhatsApp" : "SMS"}</span><span class="notif-time">${relTime(t.time)}</span></div>
+        <div class="ph-tsnip">${esc(t.snippet || "")}</div></div>${t.unread ? `<span class="ph-unread">${t.unread}</span>` : ""}`;
+      row.onclick = () => { this.cur = t; this.renderThreads(); this.renderConvo(); };
+      list.appendChild(row);
+    }
+  },
+  async renderConvo() {
+    const t = this.cur; if (!t) return;
+    const head = $("#phConvoHead"), box = $("#phBubbles");
+    $("#phCompose").hidden = false; $("#phText").placeholder = t.kind === "wa" ? "WhatsApp message" : "Text message";
+    if (t.kind === "new") {
+      head.innerHTML = `<input id="phTo" type="tel" placeholder="To: phone number (with country code for WhatsApp)" value="${esc(t.address || "")}"><select id="phVia"><option value="sms">SMS</option><option value="wa">WhatsApp</option></select>`;
+      box.innerHTML = '<div class="ph-placeholder hint">New message</div>';
+      $("#phTo").focus(); return;
+    }
+    const callBtn = t.kind === "sms" ? `<button class="icon" id="phHeadCall" title="Call">📞</button>` : "";
+    head.innerHTML = `<div class="ph-hname">${esc(t.name)}</div><div class="hint">${t.kind === "sms" ? esc(t.address) : "WhatsApp" + (t.live ? " · reply goes through the phone's notification" : "")}</div><span class="grow"></span>${callBtn}`;
+    if (callBtn) $("#phHeadCall").onclick = () => this.dial(t.address);
+    if (t.kind === "sms") {
+      try {
+        const r = await this.rpc("sms.messages", { thread: t.thread, limit: 120 });
+        if (this.cur !== t) return;
+        this.bubbles((r.messages || []).map((m) => ({ text: m.text, time: m.time, out: m.outgoing, status: m.status })));
+      } catch (e) { box.innerHTML = this.needHelp(e); }
+      return;
+    }
+    // WhatsApp: each notification carries the latest lines of the chat ("Name: text")
+    const seen = new Set(); const msgs = [];
+    for (const n of [...t.items].sort((a, b) => (a.time || 0) - (b.time || 0))) {
+      for (const line of (n.text || "").split("\n")) {
+        const s = line.trim(); if (!s || seen.has(s)) continue; seen.add(s);
+        msgs.push({ text: s, time: n.time, out: false });
+      }
+    }
+    for (const m of this.sentWa[t.id] || []) msgs.push(m);
+    msgs.sort((a, b) => (a.time || 0) - (b.time || 0));
+    this.bubbles(msgs, "Only messages that arrived as notifications appear here (WhatsApp offers no other access).");
+  },
+  bubbles(msgs, note) {
+    const box = $("#phBubbles"); box.innerHTML = note ? `<div class="ph-note hint">${esc(note)}</div>` : "";
+    let lastDay = "";
+    for (const m of msgs) {
+      const day = m.time ? new Date(m.time).toLocaleDateString() : "";
+      if (day && day !== lastDay) { box.insertAdjacentHTML("beforeend", `<div class="ph-day">${esc(day)}</div>`); lastDay = day; }
+      const b = document.createElement("div"); b.className = "ph-b " + (m.out ? "out" : "in") + (m.status === "failed" ? " failed" : "");
+      b.innerHTML = `<div class="ph-btext">${esc(m.text)}</div><div class="ph-bmeta">${m.time ? new Date(m.time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : ""}${m.status ? " · " + esc(m.status) : ""}</div>`;
+      box.appendChild(b);
+    }
+    box.scrollTop = box.scrollHeight;
+  },
+  openNew(number) {
+    this.cur = { id: "new", kind: "new", address: number || "", name: "New message" };
+    this.renderThreads(); this.renderConvo();
+  },
+  async send() {
+    const t = this.cur; const text = $("#phText").value; if (!t || !text.trim()) return;
+    const btn = $("#phSend"); btn.disabled = true;
+    try {
+      if (t.kind === "sms" || (t.kind === "new" && $("#phVia").value === "sms")) {
+        const to = t.kind === "new" ? $("#phTo").value.trim() : t.address;
+        if (!to) throw new Error("Enter a phone number");
+        await this.rpc("sms.send", { to, text });
+        toast("Text sent");
+        $("#phText").value = "";
+        if (t.kind === "new") { this.cur = null; }
+        setTimeout(() => this.loadThreads(), 1500);
+      } else if (t.kind === "wa" && t.live) {
+        const idx = (t.live.actions || []).findIndex((a) => a.reply);
+        await rpc("notif.reply", { key: t.live.key, action: idx, text }, t.live.deviceId);
+        (this.sentWa[t.id] = this.sentWa[t.id] || []).push({ text, time: Date.now(), out: true });
+        $("#phText").value = ""; toast("WhatsApp reply sent"); this.renderConvo();
+      } else {
+        let to = t.kind === "new" ? $("#phTo").value.trim() : t.name;
+        if (!/^\+?[\d\s().-]{6,}$/.test(to)) {
+          to = prompt(`To start a WhatsApp message to ${t.name}, enter their phone number with country code (e.g. +1 514 555 1234).\nTip: replies work directly while a WhatsApp notification from them is on the phone.`, "");
+          if (!to) return;
+        }
+        const r = await this.rpc("whatsapp.send", { to, text });
+        if (r && r.sent) toast("WhatsApp message sent"); else toast((r && r.note) || "Opened in WhatsApp on the phone", !r || !r.sent);
+        if (t.kind !== "new") (this.sentWa[t.id] = this.sentWa[t.id] || []).push({ text, time: Date.now(), out: true });
+        $("#phText").value = ""; if (t.kind !== "new") this.renderConvo();
+      }
+    } catch (e) { toast(e.message, true); }
+    finally { btn.disabled = false; }
+  },
+  // ---- calls ----
+  async loadCalls() {
+    const host = $("#phCallLog"); host.innerHTML = '<div class="hint">loading…</div>';
+    try {
+      const r = await this.rpc("call.log", { limit: 80 });
+      const icon = { incoming: "↙", outgoing: "↗", missed: "✕", rejected: "⊘", blocked: "⊘", voicemail: "✉" };
+      host.innerHTML = "";
+      for (const c of r.calls || []) {
+        const row = document.createElement("div"); row.className = "ph-callrow " + c.type;
+        const dur = c.duration ? (c.duration >= 60 ? Math.floor(c.duration / 60) + "m " : "") + (c.duration % 60) + "s" : "";
+        row.innerHTML = `<span class="ph-cicon" title="${esc(c.type)}">${icon[c.type] || "•"}</span>
+          <div class="ph-tmain"><div class="ph-tname">${esc(c.name || c.number || "Unknown")}</div><div class="hint">${esc(c.name ? c.number : "")} ${esc(c.type)}${dur ? " · " + dur : ""}</div></div>
+          <span class="notif-time">${relTime(c.time)}</span><button class="icon" title="Call back">📞</button><button class="icon" title="Text">💬</button>`;
+        const [cb, tx] = row.querySelectorAll("button");
+        cb.onclick = () => this.dial(c.number); tx.onclick = () => { this.show("msg"); this.openNew(c.number); };
+        host.appendChild(row);
+      }
+      if (!host.children.length) host.innerHTML = '<div class="hint">No calls yet.</div>';
+    } catch (e) { host.innerHTML = this.needHelp(e); }
+  },
+  async dial(number) {
+    number = (number || "").trim(); if (!number) { toast("Enter a number", true); return; }
+    if (!confirm(`Call ${number} from your phone?`)) return;
+    try { await this.rpc("call.dial", { number }); toast("Calling " + number + " — talk on the phone"); } catch (e) { toast(e.message, true); }
+  },
+  // ---- live events from the hub ----
+  onEvent(m) {
+    const p = m.params || {};
+    if (m.event === "call.state") this.callBanner(p);
+    if (m.event === "sms.received") {
+      if ($(".page[data-page=phone]").classList.contains("active") && this.view === "msg") {
+        clearTimeout(this.reloadT); this.reloadT = setTimeout(() => this.loadThreads(), 800);
+      }
+    }
+  },
+  callBanner(p) {
+    const b = $("#callBanner"); const who = p.name || p.number || "Unknown number";
+    const sub = (p.name && p.number ? p.number + " · " : "") + (p.device ? "on " + p.device : "");
+    const act = (method, label) => `<button data-m="${method}">${label}</button>`;
+    if (p.state === "ringing") {
+      b.className = "ringing"; b.hidden = false;
+      b.innerHTML = `<div class="cb-ico">📞</div><div class="cb-main"><div class="cb-t">Incoming call · ${esc(who)}</div><div class="cb-s">${esc(sub)}</div></div>
+        <button class="primary" data-m="call.answer">Answer</button><button class="danger" data-m="call.end">Decline</button><button data-m="sms">Text back</button>`;
+      if (Notif.browserOn() && document.hidden) try { new Notification("📞 Incoming call", { body: who, tag: "bd-call", requireInteraction: true }).onclick = () => window.focus(); } catch (e) {}
+    } else if (p.state === "active") {
+      b.className = "active"; b.hidden = false;
+      b.innerHTML = `<div class="cb-ico">🎧</div><div class="cb-main"><div class="cb-t">On a call · ${esc(who)}</div><div class="cb-s">Talk on the phone or its headset · ${esc(p.device || "")}</div></div>${act("call.end", "Hang up")}`;
+    } else {
+      b.hidden = true;
+      if (p.missed) toast("Missed call from " + who);
+      return;
+    }
+    b.querySelectorAll("button").forEach((btn) => btn.onclick = async () => {
+      const mth = btn.dataset.m;
+      try {
+        if (mth === "sms") {
+          const text = prompt("Text back " + who + ":", "Can't talk right now — I'll call you back.");
+          if (!text) return;
+          await rpc("call.end", {}, p.deviceId).catch(() => {});
+          await rpc("sms.send", { to: p.number, text }, p.deviceId); toast("Declined and texted " + who);
+        } else { await rpc(mth, {}, p.deviceId); if (mth === "call.end") b.hidden = true; }
+      } catch (e) { toast(e.message, true); }
+    });
+  },
+};
+function lastLine(t) { const l = (t || "").split("\n").filter(Boolean); return l.length ? l[l.length - 1] : ""; }
+
+/* ---------- Clipboard history ---------- */
+const Clip = {
+  bound: false,
+  bind() {
+    $("#clipSync").onchange = async (e) => { await saveSetting({ clipSync: e.target.checked }); toast(e.target.checked ? "Clipboard sync on" : "Clipboard sync off"); };
+    $("#clipWin").onchange = async (e) => { await saveSetting({ winClipHistory: e.target.checked }); toast(e.target.checked ? "Win+V history on" : "Win+V history off"); };
+    $("#clipClear").onclick = async () => { await api("/api/clipboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ op: "clear" }) }); this.load(); };
+    $("#clipAll").onclick = async () => {
+      const text = $("#clipText").value; if (!text) return;
+      try { await api("/api/clipboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ op: "send", text, target: "all" }) }); toast("Sent to every device"); this.load(); }
+      catch (e) { toast(e.message, true); }
+    };
+  },
+  async enter() {
+    try { const s = await (await api("/api/settings")).json(); $("#clipSync").checked = s.clipSync !== false; $("#clipWinWrap").hidden = !s.winClipHistorySupported; $("#clipWin").checked = !!s.winClipHistory; } catch (e) {}
+    this.load();
+  },
+  async load() {
+    const host = $("#clipHist");
+    let clips = [];
+    try { clips = (await (await api("/api/clipboard")).json()).clips || []; } catch (e) {}
+    host.innerHTML = clips.length ? "" : '<div class="hint">Copy something on any PC or phone and it shows up here.</div>';
+    for (const c of clips) {
+      const row = document.createElement("div"); row.className = "clip-item";
+      row.innerHTML = `<div class="clip-text">${esc(c.text.length > 600 ? c.text.slice(0, 600) + "…" : c.text)}</div>
+        <div class="clip-meta"><span class="hint">${esc(c.device || "")} · ${relTime(c.time)}</span><span class="grow"></span>
+        <button class="notif-act">Copy here</button><button class="notif-act primary">Use on all devices</button></div>`;
+      const [here, all] = row.querySelectorAll("button");
+      here.onclick = () => copyText(c.text, "Copied");
+      all.onclick = async () => {
+        try { await api("/api/clipboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ op: "use", id: c.id, target: "all" }) }); toast("On every device's clipboard"); }
+        catch (e) { toast(e.message, true); }
+      };
+      host.appendChild(row);
+    }
+  },
+  onAdded() { if ($(".page[data-page=clip]").classList.contains("active")) this.load(); },
+};
+async function saveSetting(obj) {
+  try { await api("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(obj) }); }
+  catch (e) { toast(e.message, true); }
 }
 
 /* ---------- Devices page ---------- */
@@ -1179,7 +1455,7 @@ async function tryLogin(key) {
 }
 function showApp() {
   $("#login").style.display = "none";
-  buildNav(); Files.bind(); Desktop.bind(); bindClipboard(); Notif.bind(); Pair.bind();
+  buildNav(); Files.bind(); Desktop.bind(); bindClipboard(); Notif.bind(); Phone.bind(); Clip.bind(); Pair.bind();
   $("#deviceSel").onchange = (e) => switchDevice(e.target.value);
   connect();
   go("term");

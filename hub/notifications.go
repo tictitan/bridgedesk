@@ -43,12 +43,12 @@ type NotifLog struct {
 	path      string
 	saveTimer *time.Timer
 	toast     func(title, text string)
-	listeners map[int]func(string, Notification)
+	listeners map[int]func(string, any)
 	nextID    int
 }
 
 func NewNotifLog(toast func(string, string)) *NotifLog {
-	nl := &NotifLog{max: 500, toast: toast, listeners: map[int]func(string, Notification){},
+	nl := &NotifLog{max: 500, toast: toast, listeners: map[int]func(string, any){},
 		path: filepath.Join(configDir(), "notifications.json")}
 	if data, err := os.ReadFile(nl.path); err == nil {
 		json.Unmarshal(data, &nl.ring)
@@ -138,6 +138,29 @@ func (nl *NotifLog) handleEvent(s *Server, deviceID string, e Event) {
 			go postWebhook(s.cfg.NotifWebhook, n)
 		}
 		log.Printf("notification [%s] %s: %s — %s", n.Device, n.App, n.Title, n.Text)
+	case "call.state", "sms.received":
+		var m map[string]any
+		if json.Unmarshal(e.Params, &m) != nil {
+			return
+		}
+		m["deviceId"] = deviceID
+		if d, err := s.hub.Get(deviceID); err == nil {
+			m["device"] = d.Info().Name
+		}
+		nl.broadcastMap(e.Event, m)
+		who := strOf(m["name"])
+		if who == "" {
+			who = strOf(m["number"])
+		}
+		if e.Event == "call.state" && nl.toast != nil && s.cfg.MirrorNotif {
+			switch {
+			case strOf(m["state"]) == "ringing":
+				nl.toast("📞 Incoming call", who+" — answer or decline from BridgeDesk")
+			case m["missed"] == true:
+				nl.toast("Missed call", who)
+			}
+		}
+		log.Printf("%s [%v] %s", e.Event, m["device"], who)
 	case "notif.removed":
 		var p struct {
 			Key string `json:"key"`
@@ -301,7 +324,7 @@ func (nl *NotifLog) recent() []Notification { return nl.Query(&Config{}, NotifQu
 
 // ---- live push to open dashboards ----
 
-func (nl *NotifLog) Listen(fn func(event string, n Notification)) func() {
+func (nl *NotifLog) Listen(fn func(event string, params any)) func() {
 	nl.mu.Lock()
 	id := nl.nextID
 	nl.nextID++
@@ -312,14 +335,24 @@ func (nl *NotifLog) Listen(fn func(event string, n Notification)) func() {
 
 func (nl *NotifLog) broadcast(event string, n Notification) {
 	n.Sid = "hub.notif"
+	nl.emit(event, n)
+}
+
+// broadcastMap pushes any other hub event (calls, texts, clipboard) to open dashboards.
+func (nl *NotifLog) broadcastMap(event string, m map[string]any) {
+	m["sid"] = "hub.notif"
+	nl.emit(event, m)
+}
+
+func (nl *NotifLog) emit(event string, payload any) {
 	nl.mu.Lock()
-	fns := make([]func(string, Notification), 0, len(nl.listeners))
+	fns := make([]func(string, any), 0, len(nl.listeners))
 	for _, f := range nl.listeners {
 		fns = append(fns, f)
 	}
 	nl.mu.Unlock()
 	for _, f := range fns {
-		f(event, n)
+		f(event, payload)
 	}
 }
 
@@ -348,4 +381,11 @@ func postWebhook(url string, n Notification) {
 	if resp.StatusCode >= 300 {
 		log.Printf("notification webhook: HTTP %d", resp.StatusCode)
 	}
+}
+
+func strOf(v any) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return ""
 }

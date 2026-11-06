@@ -72,6 +72,21 @@ public class ControlService extends AccessibilityService {
         return ok;
     }
 
+    /** Click WhatsApp's Send button (by view id, falling back to its "Send" label). */
+    public boolean clickSend(String pkg) {
+        AccessibilityNodeInfo root = getRootInActiveWindow();
+        if (root == null) return false;
+        java.util.List<AccessibilityNodeInfo> nodes = root.findAccessibilityNodeInfosByViewId(pkg + ":id/send");
+        if (nodes == null || nodes.isEmpty()) nodes = root.findAccessibilityNodeInfosByText("Send");
+        if (nodes == null) return false;
+        for (AccessibilityNodeInfo n : nodes) {
+            AccessibilityNodeInfo t = n;
+            while (t != null && !t.isClickable()) t = t.getParent();
+            if (t != null && t.isEnabled() && t.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return true;
+        }
+        return false;
+    }
+
     private AccessibilityNodeInfo findFocusedEditable() {
         AccessibilityNodeInfo root = getRootInActiveWindow();
         if (root == null) return null;

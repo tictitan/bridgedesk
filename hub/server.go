@@ -35,6 +35,7 @@ type Server struct {
 	wdav  *webdav.Handler
 	start time.Time
 	notif *NotifLog
+	clip  *ClipSync
 
 	bookMu    sync.Mutex
 	book      map[string]LinkTarget      // fleet address book: url -> {key,fp}
@@ -71,7 +72,11 @@ func NewServer(cfg *Config, hub *Hub, cert tls.Certificate, fp string) *Server {
 	for _, l := range cfg.Links {
 		s.book[l.URL] = l
 	}
-	hub.OnEvent = func(deviceID string, e Event) { s.notif.handleEvent(s, deviceID, e) }
+	s.clip = NewClipSync(s)
+	hub.OnEvent = func(deviceID string, e Event) {
+		s.notif.handleEvent(s, deviceID, e)
+		s.clip.handleEvent(deviceID, e)
+	}
 	s.routes()
 	return s
 }
@@ -165,6 +170,7 @@ func (s *Server) routes() {
 	m.HandleFunc("/api/upload", s.auth(s.handleUpload))
 	m.HandleFunc("/api/settings", s.auth(s.handleSettings))
 	m.HandleFunc("/api/notifications", s.auth(s.handleNotifications))
+	m.HandleFunc("/api/clipboard", s.auth(s.handleClipboard))
 	m.HandleFunc("/api/links", s.auth(s.handleLinks))
 	m.HandleFunc("/api/fleet-shares", s.auth(s.handleFleetShares))
 	m.HandleFunc("/ws", s.auth(s.handleWS)) // dashboard event/RPC stream
@@ -519,10 +525,12 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	if len(ips) > 0 {
 		host = ips[0]
 	}
+	clipSupported, clipOn := winClipHistory()
 	writeJSON(w, 200, map[string]any{
 		"name": s.cfg.Name, "lanPort": s.cfg.LANPort, "listenLan": s.cfg.ListenLAN,
 		"discovery": s.cfg.Discovery, "allowShell": s.cfg.AllowShell, "allowScreen": s.cfg.AllowScreen,
 		"allowFiles": s.cfg.AllowFiles, "allowMcp": s.cfg.AllowMCP, "mirrorNotif": s.cfg.MirrorNotif, "inboxDir": s.cfg.InboxDir,
+		"clipSync": !s.cfg.ClipSyncOff, "winClipHistorySupported": clipSupported, "winClipHistory": clipOn,
 		"autoCopyCodes": s.cfg.AutoCopyCodes, "notifWebhook": s.cfg.NotifWebhook, "mutedApps": s.cfg.MutedApps,
 		"fingerprint": s.fp, "autostart": autostartEnabled(), "accessKey": s.cfg.AccessKey,
 		"addresses": ips, "primaryHost": host,
@@ -545,6 +553,12 @@ func applySettings(c *Config, in map[string]any) {
 	b("allowMcp", &c.AllowMCP)
 	b("mirrorNotif", &c.MirrorNotif)
 	b("autoCopyCodes", &c.AutoCopyCodes)
+	if v, ok := in["clipSync"].(bool); ok {
+		c.ClipSyncOff = !v
+	}
+	if v, ok := in["winClipHistory"].(bool); ok {
+		setWinClipHistory(v)
+	}
 	if v, ok := in["notifWebhook"].(string); ok {
 		v = strings.TrimSpace(v)
 		if v == "" || strings.HasPrefix(v, "https://") || strings.HasPrefix(v, "http://") {
@@ -618,7 +632,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 	// Every dashboard gets fleet-wide notification pushes (badge, browser alerts, live list).
-	subs = append(subs, s.notif.Listen(func(event string, n Notification) {
+	subs = append(subs, s.notif.Listen(func(event string, n any) {
 		send(map[string]any{"event": event, "params": n})
 	}))
 
@@ -671,6 +685,7 @@ func deviceID(h *Hub, name string) string {
 // ---- listeners ----
 
 func (s *Server) Run() error {
+	go s.clip.watch()
 	tlsCfg := &tls.Config{Certificates: []tls.Certificate{s.cert}, MinVersion: tls.VersionTLS12}
 
 	// Loopback HTTP: dashboard + MCP, never exposed off-box.
@@ -803,3 +818,60 @@ func encodeB64(b []byte) string { return b64enc(b) }
 func (s *Server) handleDownloadStatic(w http.ResponseWriter, r *http.Request) {}
 
 var _ = filepath.Join
+
+// handleClipboard serves the fleet clipboard history.
+//
+//	GET  /api/clipboard
+//	POST /api/clipboard {"op":"use","id":3,"target":"all"|"<deviceId>"} | {"op":"send","text":"…","target":…} | {"op":"clear"}
+func (s *Server) handleClipboard(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "POST" {
+		var in struct {
+			Op     string `json:"op"`
+			ID     int64  `json:"id"`
+			Text   string `json:"text"`
+			Target string `json:"target"`
+		}
+		json.NewDecoder(r.Body).Decode(&in)
+		switch in.Op {
+		case "clear":
+			s.clip.Clear()
+		case "use", "send":
+			text := in.Text
+			if in.Op == "use" {
+				c, ok := s.clip.get(in.ID)
+				if !ok {
+					http.Error(w, "clip not found", 404)
+					return
+				}
+				text = c.Text
+			}
+			if text == "" {
+				http.Error(w, "empty", 400)
+				return
+			}
+			if err := s.clipTo(r.Context(), in.Target, text); err != nil {
+				http.Error(w, err.Error(), 502)
+				return
+			}
+		default:
+			http.Error(w, "unknown op", 400)
+			return
+		}
+		writeJSON(w, 200, map[string]any{"ok": true})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"clips": s.clip.History(), "sync": !s.cfg.ClipSyncOff})
+}
+
+// clipTo puts text on one device's clipboard, or on every device ("all" / "").
+func (s *Server) clipTo(ctx context.Context, target, text string) error {
+	if target == "" || target == "all" {
+		s.clip.mu.Lock()
+		s.clip.lastLocal = text
+		s.clip.mu.Unlock()
+		clipboardSet(text)
+		s.clip.announce(text) // every hub and phone picks it up
+		return nil
+	}
+	return s.hub.Call(ctx, target, "clipboard.set", map[string]any{"text": text}, nil)
+}

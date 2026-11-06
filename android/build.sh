@@ -28,7 +28,7 @@ echo "[2/7] link resources + manifest -> base.apk, R.java"
   --manifest "$HERE/AndroidManifest.xml" \
   --java "$OUT/gen" \
   --min-sdk-version 26 --target-sdk-version 34 \
-  --version-code 3 --version-name 1.1.0 \
+  --version-code "${BD_VERSION_CODE:-3}" --version-name "${BD_VERSION_NAME:-1.1.0}" \
   "$OUT/compiled/res.zip"
 
 echo "[3/7] javac"
@@ -59,13 +59,21 @@ echo "[6/7] zipalign"
 "$BT/zipalign" -f -p 4 "$OUT/apk/unaligned.apk" "$OUT/apk/aligned.apk"
 
 echo "[7/7] sign"
-KS="$HERE/debug.keystore"
-if [ ! -f "$KS" ]; then
-  keytool -genkeypair -v -keystore "$KS" -storepass bridgedesk -keypass bridgedesk \
-    -alias bridgedesk -keyalg RSA -keysize 2048 -validity 10000 \
-    -dname "CN=BridgeDesk, OU=Dev, O=BridgeDesk, L=, S=, C=US" >/dev/null 2>&1
+# A fixed release key lets new versions install over old ones. CI decodes it from the
+# ANDROID_KEYSTORE_B64 secret; locally it is android/release.keystore + android/keystore.pass.
+KS="${BD_KEYSTORE:-$HERE/release.keystore}"
+PASS="${BD_KS_PASS:-}"
+[ -z "$PASS" ] && [ -f "$HERE/keystore.pass" ] && PASS="$(cat "$HERE/keystore.pass")"
+if [ ! -f "$KS" ] || [ -z "$PASS" ]; then
+  echo "  (no release key — signing with a throwaway debug key; updates won't install over other builds)"
+  KS="$HERE/debug.keystore"; PASS=bridgedesk
+  if [ ! -f "$KS" ]; then
+    keytool -genkeypair -v -keystore "$KS" -storepass bridgedesk -keypass bridgedesk \
+      -alias bridgedesk -keyalg RSA -keysize 2048 -validity 10000 \
+      -dname "CN=BridgeDesk, OU=Dev, O=BridgeDesk, L=, S=, C=US" >/dev/null 2>&1
+  fi
 fi
-"$BT/apksigner" sign --ks "$KS" --ks-pass pass:bridgedesk --key-pass pass:bridgedesk \
+"$BT/apksigner" sign --ks "$KS" --ks-pass "pass:$PASS" --key-pass "pass:$PASS" \
   --min-sdk-version 26 --v1-signing-enabled true --v2-signing-enabled true \
   --out "$HERE/BridgeDesk.apk" "$OUT/apk/aligned.apk"
 "$BT/apksigner" verify --print-certs "$HERE/BridgeDesk.apk" >/dev/null && echo "signature OK"

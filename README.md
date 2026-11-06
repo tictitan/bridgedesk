@@ -21,7 +21,7 @@ And a bonus the commercial tools don't have: a built-in **MCP server**, so **Cla
 
 ## Download
 
-Grab the latest build from the **[Releases page](../../releases/latest)**:
+Grab the latest build from the **[Releases page](../../releases/latest)** — every change pushed to `master` is built and published automatically:
 
 | File | Run it on |
 |---|---|
@@ -157,6 +157,26 @@ Claude can do this too, through MCP: *"check my phone for an Okta prompt and app
 
 > **Privacy note:** notification mirroring can include one-time codes and login prompts, so it's gated behind your access key, the pinned certificate, and an on-phone toggle — and it only runs while you've enabled it. History is stored only on your PC (`notifications.json` in the BridgeDesk config folder). Keep it to networks you trust.
 
+### Calls, texts & WhatsApp on the PC (Phone tab)
+
+On the phone: **Phone access → Calls & SMS → Grant** (if Android refuses a sideloaded app, open BridgeDesk's *App info → ⋮ → Allow restricted settings* first). Then the dashboard's **Phone** tab gives you:
+
+- **Incoming calls** pop up on every PC — **Answer**, **Decline**, or **Text back** ("Can't talk right now"). Missed calls are flagged. Calls are answered on the phone; the audio stays on the phone or its Bluetooth headset (Android doesn't let apps route call audio to a PC).
+- **Call log** with call back / text buttons, and a dialer to place calls from the PC.
+- **SMS** — every conversation, full history, unread counts; send texts from the PC (they show up in the phone's Messages app too).
+- **WhatsApp** — chats are rebuilt from WhatsApp notifications (WhatsApp has no other access), shown next to your SMS threads. Reply straight from the PC while the notification is on the phone, or start a new chat with any number: BridgeDesk opens it on the phone and taps Send for you (needs *remote touch* on and the phone unlocked). WhatsApp calls ring as notifications with Answer / Decline.
+
+Claude can use it through MCP with `bridge_phone` (read/send SMS, send WhatsApp, dial, answer, hang up, call log) — it should always confirm recipients and text with you first.
+
+### One clipboard for every device (and Win+V)
+
+Copy on any PC and paste on any other PC or phone — on by default (*Clipboard → Keep all my PCs and phones on the same clipboard*).
+
+- **Win+V** — every synced item goes through the normal Windows clipboard, so with clipboard history on (one checkbox on the Clipboard page) you can pick any of them from **Win+V**, not just the last one.
+- **History** — the Clipboard page lists the recent items from every device; *Copy here* or *Use on all devices*.
+- **Phones** — PC → phone is automatic. Phone → PC: tap **Send clipboard to PC** on BridgeDesk's notification, use **Share → Send to PC**, or just open BridgeDesk (Android only lets the app on screen read the clipboard).
+- **Private** — copies from password managers (KeePass, Bitwarden, 1Password…) are never synced, and history is kept in memory only.
+
 ### About "control the phone while it's locked"
 
 - **Viewing** a locked phone works — MediaProjection keeps streaming.
@@ -177,7 +197,7 @@ Claude can do this too, through MCP: *"check my phone for an Okta prompt and app
 
 The hub exposes a Model Context Protocol server at **`http://127.0.0.1:47811/mcp`** with these tools:
 
-`bridge_list_devices`, `bridge_run`, `bridge_list_files`, `bridge_read_file`, `bridge_write_file`, `bridge_transfer` (copy a file *between* devices), `bridge_screenshot`, `bridge_input`, `bridge_clipboard`, `bridge_notifications` (read a phone's notifications), `bridge_notification_action` (tap/approve/reply/dismiss one), `bridge_notification_history` (search saved notifications), `bridge_latest_code` (get the newest 2FA code).
+`bridge_list_devices`, `bridge_run`, `bridge_list_files`, `bridge_read_file`, `bridge_write_file`, `bridge_transfer` (copy a file *between* devices), `bridge_screenshot`, `bridge_input`, `bridge_clipboard`, `bridge_notifications` (read a phone's notifications), `bridge_notification_action` (tap/approve/reply/dismiss one), `bridge_notification_history` (search saved notifications), `bridge_latest_code` (get the newest 2FA code), `bridge_phone` (SMS, WhatsApp, calls).
 
 So you can ask Claude things like *"screenshot my phone"*, *"pull the newest file from my phone's Download folder onto my PC Desktop"*, or *"run `Get-Process` on my PC and summarize the top memory users."*
 

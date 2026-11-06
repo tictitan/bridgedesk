@@ -5,7 +5,6 @@ package main
 import (
 	"errors"
 	"image"
-	"os/exec"
 	"sort"
 	"sync"
 	"syscall"
@@ -512,24 +511,6 @@ func splitLower(s string, sep byte) []string {
 		out = append(out, string(cur))
 	}
 	return out
-}
-
-// ---------------- clipboard (PowerShell-backed, avoids extra Win32 marshaling) ----------------
-
-func clipboardGet() (string, error) {
-	cmd := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "Get-Clipboard -Raw")
-	hideWindow(cmd)
-	out, err := cmd.Output()
-	return decodeConsole(out), err
-}
-
-func clipboardSet(text string) error {
-	name, args := shellCommand("powershell", "Set-Clipboard -Value ([Console]::In.ReadToEnd())")
-	cmd := exec.Command(name, args...)
-	hideWindow(cmd)
-	stdin, _ := cmd.StdinPipe()
-	go func() { stdin.Write([]byte(text)); stdin.Close() }()
-	return cmd.Run()
 }
 
 var _ = syscall.Handle(0)

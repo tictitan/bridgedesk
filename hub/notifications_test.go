@@ -24,7 +24,7 @@ func TestExtractCode(t *testing.T) {
 }
 
 func TestNotifLogQuery(t *testing.T) {
-	nl := &NotifLog{max: 3, listeners: map[int]func(string, Notification){}, path: t.TempDir() + "/n.json"}
+	nl := &NotifLog{max: 3, listeners: map[int]func(string, any){}, path: t.TempDir() + "/n.json"}
 	cfg := &Config{MutedApps: []string{"Spammy"}}
 	nl.add(Notification{Key: "a", App: "Messages", Text: "Your code is 123456", Code: "123456", Received: 1})
 	nl.add(Notification{Key: "b", App: "Spammy", Text: "buy now", Received: 2})

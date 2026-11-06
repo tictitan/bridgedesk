@@ -21,6 +21,8 @@ public class Store {
     public boolean allowFiles() { return sp.getBoolean("allowFiles", true); }
     public boolean allowShell() { return sp.getBoolean("allowShell", true); }
     public boolean allowNotifications() { return sp.getBoolean("allowNotifications", true); }
+    public boolean allowPhone() { return sp.getBoolean("allowPhone", true); }
+    public boolean allowClipSync() { return sp.getBoolean("allowClipSync", true); }
 
     public void setConnection(String host, int port, String key, String fp) {
         sp.edit().putString("host", host).putString("key", key).putInt("port", port).putString("fp", fp).apply();

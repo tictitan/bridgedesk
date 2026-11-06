@@ -221,10 +221,15 @@ public class MainActivity extends Activity {
             c.addView(actionRow("Full file access", "Needed to browse all of internal storage.",
                     hasAllFiles() ? "Granted ✓" : "Grant", v -> requestAllFiles()));
         }
+        c.addView(actionRow("Calls & SMS", "See calls and texts on the PC: answer/decline, call back, read and send SMS, send WhatsApp.",
+                PhoneBridge.allGranted(this) ? "Granted ✓" : "Grant", v -> requestPermissions(PhoneBridge.PERMS, 8)));
+        c.addView(hint("Clipboard: text you copy on a PC lands here automatically. To send this phone's clipboard to your PCs, tap \"Send clipboard to PC\" on the BridgeDesk notification, use Share → Send to PC, or just open BridgeDesk."));
         c.addView(toggleRow("Allow shell commands", store.allowShell(), on -> store.setAllow("allowShell", on)));
         c.addView(toggleRow("Allow file access", store.allowFiles(), on -> store.setAllow("allowFiles", on)));
         c.addView(toggleRow("Allow screen & control", store.allowControl(), on -> store.setAllow("allowControl", on)));
         c.addView(toggleRow("Allow notification mirroring", store.allowNotifications(), on -> store.setAllow("allowNotifications", on)));
+        c.addView(toggleRow("Allow calls & SMS", store.allowPhone(), on -> store.setAllow("allowPhone", on)));
+        c.addView(toggleRow("Sync clipboard with PCs", store.allowClipSync(), on -> store.setAllow("allowClipSync", on)));
 
         Button back = button("Done", true);
         back.setOnClickListener(v -> { showDashboard(); });
@@ -399,6 +404,22 @@ public class MainActivity extends Activity {
             toast("Certificate did not match the pinned fingerprint");
         }
         @Override public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest r) { return false; }
+    }
+
+    @Override public void onRequestPermissionsResult(int req, String[] perms, int[] res) {
+        super.onRequestPermissionsResult(req, perms, res);
+        if (req == 8) {
+            toast(PhoneBridge.allGranted(this) ? "Calls & SMS ready" : "Some permissions were denied — if Android blocks them, open App info → ⋮ → Allow restricted settings");
+            showAgentPanel();
+        }
+    }
+
+    // Opening BridgeDesk is a natural moment to sync: Android only lets the focused app read the clipboard.
+    @Override public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (!hasFocus) return;
+        String t = ClipSendActivity.readClipboard(this);
+        if (!t.isEmpty() && !t.equals(Rpc.lastClip)) ClipSendActivity.sendToPc(t);
     }
 
     @Override public void onBackPressed() {
