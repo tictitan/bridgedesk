@@ -582,6 +582,66 @@ const Links = {
   },
 };
 
+/* ---------- Shared storage (SMB/NFS) ---------- */
+const Shares = {
+  html() {
+    return `<div class="card">
+      <h3>Shared storage (SMB / NFS)</h3>
+      <p class="hint">Share a folder from this PC so other machines in the fleet can mount it as a network drive, or mount a share from elsewhere. Creating/mounting usually needs administrator rights.</p>
+      <div class="row"><b style="font-size:13px">Share a folder</b></div>
+      <div class="row">
+        <input type="text" id="shPath" placeholder="folder path e.g. C:\\Shared" style="flex:2;min-width:160px">
+        <input type="text" id="shName" placeholder="share name" style="flex:1;min-width:110px">
+        <label class="hint"><input type="checkbox" id="shRO"> read-only</label>
+        <button id="shCreate" class="primary">Share</button>
+      </div>
+      <div id="shList" style="margin:6px 0"></div>
+      <div class="row" style="margin-top:12px"><b style="font-size:13px">Mount a share</b></div>
+      <div class="row">
+        <input type="text" id="shSrc" placeholder="\\\\PC\\share  or  host:/export" style="flex:2;min-width:180px">
+        <input type="text" id="shAs" placeholder="Z:  or  /mnt/x" style="flex:1;min-width:90px">
+        <button id="shMount" class="primary">Mount</button>
+      </div>
+      <div class="row"><input type="text" id="shUser" placeholder="user (optional)" style="flex:1"><input type="password" id="shPass" placeholder="password (optional)" style="flex:1"></div>
+      <div id="shMsg" class="hint"></div>
+    </div>`;
+  },
+  bind() {
+    const C = $("#shCreate"); if (!C) return;
+    C.onclick = async () => {
+      const path = $("#shPath").value.trim(), name = $("#shName").value.trim();
+      if (!path || !name) { $("#shMsg").textContent = "Enter a folder and a share name."; return; }
+      $("#shMsg").textContent = "Creating share…";
+      try { const r = await rpc("share.create", { path, name, readonly: $("#shRO").checked });
+        $("#shMsg").innerHTML = `✓ Shared as <span class="mono">${esc(r.unc || name)}</span> — mount that on another machine.`;
+        $("#shPath").value = ""; $("#shName").value = ""; this.list();
+      } catch (e) { $("#shMsg").textContent = "⚠ " + e.message; }
+    };
+    $("#shMount").onclick = async () => {
+      const source = $("#shSrc").value.trim(), mountAs = $("#shAs").value.trim();
+      if (!source || !mountAs) { $("#shMsg").textContent = "Enter a share path and a drive/mount point."; return; }
+      $("#shMsg").textContent = "Mounting…";
+      try { const r = await rpc("share.mount", { source, mountAs, user: $("#shUser").value.trim(), pass: $("#shPass").value });
+        $("#shMsg").innerHTML = `✓ Mounted <span class="mono">${esc(source)}</span> at <span class="mono">${esc(r.mounted || mountAs)}</span>`;
+        $("#shSrc").value = ""; $("#shAs").value = ""; $("#shUser").value = ""; $("#shPass").value = "";
+      } catch (e) { $("#shMsg").textContent = "⚠ " + e.message; }
+    };
+    this.list();
+  },
+  async list() {
+    const host = $("#shList"); if (!host) return;
+    let shares = [];
+    try { shares = await rpc("share.list"); } catch (e) { return; }
+    if (!shares || !shares.length) { host.innerHTML = '<div class="hint" style="padding:2px 0">No shares on this PC yet.</div>'; return; }
+    host.innerHTML = shares.map(s => `<div class="row" style="justify-content:space-between;border-bottom:1px solid var(--border);padding:6px 0">
+      <div><span class="mono" style="color:var(--accent)">${esc(s.unc || s.name)}</span> <span class="hint">→ ${esc(s.path)}</span></div>
+      <button class="icon danger" data-rm="${esc(s.name)}">Unshare</button></div>`).join("");
+    host.querySelectorAll("button[data-rm]").forEach(b => b.onclick = async () => {
+      try { await rpc("share.remove", { name: b.dataset.rm }); this.list(); } catch (e) { toast(e.message, true); }
+    });
+  },
+};
+
 /* ---------- Settings ---------- */
 const Settings = {
   async load() {
@@ -623,8 +683,10 @@ const Settings = {
         <div class="row" style="margin-top:10px"><button class="danger" id="setRotate">Rotate access key</button>
           <span class="hint">Rotating disconnects all currently linked devices.</span></div>
       </div>`;
+    body.insertAdjacentHTML("beforeend", Shares.html());
     body.querySelectorAll(".sw").forEach((sw) => sw.onclick = () => this.toggle(sw));
     $("#setNameSave").onclick = () => this.save({ name: $("#setName").value });
+    Shares.bind();
     $("#setRotate").onclick = async () => { if (!confirm("Rotate the access key? You'll re-enter it on every device.")) return; await this.save({ rotateKey: true }); toast("Key rotated — reconnecting"); setTimeout(() => location.reload(), 800); };
   },
   async toggle(sw) {

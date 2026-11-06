@@ -158,6 +158,32 @@ func mcpTools() []map[string]any {
 			}},
 		},
 		{
+			"name":        "bridge_shares",
+			"description": "List the SMB shares a device is exposing (Windows). Each has a name, folder path, and the UNC path others mount.",
+			"inputSchema": map[string]any{"type": "object", "properties": map[string]any{"device": dev}},
+		},
+		{
+			"name":        "bridge_share_create",
+			"description": "Expose a folder on a device as an SMB share so other machines in the fleet can mount it as a network drive (Windows; needs admin). Returns the UNC path to mount elsewhere.",
+			"inputSchema": map[string]any{"type": "object", "required": []string{"path", "name"}, "properties": map[string]any{
+				"device":   dev,
+				"name":     map[string]any{"type": "string", "description": "Share name (what others see, e.g. 'Assets')."},
+				"path":     map[string]any{"type": "string", "description": "Local folder to share."},
+				"readonly": map[string]any{"type": "boolean", "description": "Share read-only."},
+			}},
+		},
+		{
+			"name":        "bridge_share_mount",
+			"description": "Mount a shared folder on a device: SMB (\\\\server\\share) or NFS (server:/export). mountAs is a drive letter on Windows (e.g. 'Z:') or a directory on Linux/macOS. Gives fleet machines shared storage.",
+			"inputSchema": map[string]any{"type": "object", "required": []string{"source", "mountAs"}, "properties": map[string]any{
+				"device":  dev,
+				"source":  map[string]any{"type": "string", "description": "\\\\host\\share (SMB) or host:/export (NFS)."},
+				"mountAs": map[string]any{"type": "string", "description": "Drive letter (Windows) or mount directory (Linux/macOS)."},
+				"user":    map[string]any{"type": "string"},
+				"pass":    map[string]any{"type": "string"},
+			}},
+		},
+		{
 			"name":        "bridge_notifications",
 			"description": "List current notifications mirrored from a phone (messages, SMS codes, push prompts like Okta Verify). Each has a key, app, title, text and a list of action labels.",
 			"inputSchema": map[string]any{"type": "object", "properties": map[string]any{"device": dev}},
@@ -319,6 +345,30 @@ func (s *Server) mcpCallTool(ctx context.Context, req mcpReq) any {
 			return fail(err)
 		}
 		return textResult(out.Text)
+
+	case "bridge_shares":
+		var out []ShareInfo
+		if err := s.hub.Call(ctx, dev, "share.list", nil, &out); err != nil {
+			return fail(err)
+		}
+		return jsonResult(out)
+
+	case "bridge_share_create":
+		var out map[string]any
+		ro, _ := args["readonly"].(bool)
+		if err := s.hub.Call(ctx, dev, "share.create", map[string]any{"name": str("name"), "path": str("path"), "readonly": ro}, &out); err != nil {
+			return fail(err)
+		}
+		return jsonResult(out)
+
+	case "bridge_share_mount":
+		var out map[string]any
+		if err := s.hub.Call(ctx, dev, "share.mount", map[string]any{
+			"source": str("source"), "mountAs": str("mountAs"), "user": str("user"), "pass": str("pass"),
+		}, &out); err != nil {
+			return fail(err)
+		}
+		return jsonResult(out)
 
 	case "bridge_notifications":
 		var out struct {

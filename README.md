@@ -162,8 +162,9 @@ Any MCP client that speaks HTTP can point straight at `http://127.0.0.1:47811/mc
 
 ---
 
-## 4. Map the PC's shared folder as a drive (SMB/NFS-like)
+## 4. Shared storage
 
+### a) WebDAV drive (zero setup, cross-platform)
 The hub shares its **Inbox** folder (`Downloads\BridgeDesk`) over WebDAV, which Windows, macOS, Linux and Android file managers mount natively.
 
 - **Windows:** File Explorer → *Map network drive* → `https://<PC-IP>:47810/dav/` → when prompted, any username, password = your access key.
@@ -171,6 +172,14 @@ The hub shares its **Inbox** folder (`Downloads\BridgeDesk`) over WebDAV, which 
 - **Android:** any file manager with WebDAV (e.g. CX, Solid Explorer).
 
 Files phones send also land in this Inbox.
+
+### b) Real SMB / NFS shares (Settings → Shared storage)
+On a Windows hub you can **expose any folder as an SMB share** and **mount** SMB/NFS shares on any device, from the dashboard:
+
+- **Share a folder** → gives you a `\\PC\share` path to mount elsewhere. (Creating a share needs admin — use the tray's *Restart as administrator*.)
+- **Mount a share** → enter `\\host\share` (SMB) or `host:/export` (NFS) and a target (`Z:` on Windows, `/mnt/x` on Linux/macOS).
+
+Claude can do this across the fleet too: `bridge_share_create` on one machine + `bridge_share_mount` on another gives the whole fleet a common drive (shared UE assets, build outputs, etc.). Linux/macOS hubs can *mount* shares; to *serve* SMB from them, use the WebDAV drive or configure Samba separately.
 
 ---
 

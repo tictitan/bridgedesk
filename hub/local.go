@@ -350,6 +350,44 @@ func (d *LocalDevice) call(ctx context.Context, method string, params json.RawMe
 		var p struct{ Target string }
 		want(params, &p)
 		return true, openTarget(p.Target)
+
+	// ---------- shared storage (SMB / NFS) ----------
+	case "share.list":
+		if err := d.need("files"); err != nil {
+			return nil, err
+		}
+		return shareList(ctx)
+	case "share.create":
+		if err := d.need("files"); err != nil {
+			return nil, err
+		}
+		var p struct {
+			Name, Path string
+			Readonly   bool
+		}
+		want(params, &p)
+		return shareCreate(ctx, p.Name, p.Path, p.Readonly)
+	case "share.remove":
+		if err := d.need("files"); err != nil {
+			return nil, err
+		}
+		var p struct{ Name string }
+		want(params, &p)
+		return shareRemove(ctx, p.Name)
+	case "share.mount":
+		if err := d.need("files"); err != nil {
+			return nil, err
+		}
+		var p struct{ Source, MountAs, User, Pass string }
+		want(params, &p)
+		return shareMount(ctx, p.Source, p.MountAs, p.User, p.Pass)
+	case "share.unmount":
+		if err := d.need("files"); err != nil {
+			return nil, err
+		}
+		var p struct{ MountAs string }
+		want(params, &p)
+		return shareUnmount(ctx, p.MountAs)
 	}
 	return nil, fmt.Errorf("unknown method %q", method)
 }
