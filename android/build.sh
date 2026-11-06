@@ -28,7 +28,7 @@ echo "[2/7] link resources + manifest -> base.apk, R.java"
   --manifest "$HERE/AndroidManifest.xml" \
   --java "$OUT/gen" \
   --min-sdk-version 26 --target-sdk-version 34 \
-  --version-code 1 --version-name 1.0.0 \
+  --version-code 2 --version-name 1.0.1 \
   "$OUT/compiled/res.zip"
 
 echo "[3/7] javac"

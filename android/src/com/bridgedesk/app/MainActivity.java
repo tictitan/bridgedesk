@@ -19,9 +19,21 @@ import android.view.ViewGroup;
 import android.webkit.*;
 import android.widget.*;
 
+import android.content.ContentValues;
+import android.provider.MediaStore;
+
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.URL;
 import java.security.MessageDigest;
+import java.security.SecureRandom;
 import java.security.cert.X509Certificate;
 import java.util.Locale;
+import javax.net.ssl.HttpsURLConnection;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.TrustManager;
 
 /**
  * Two things in one screen:
@@ -35,6 +47,8 @@ public class MainActivity extends Activity {
     private LinearLayout setup;
     private FrameLayout rootView;
     private TextView statusLine;
+    private ValueCallback<Uri[]> pendingChooser;
+    private static final int REQ_FILE_CHOOSER = 41;
 
     @Override protected void onCreate(Bundle b) {
         super.onCreate(b);
@@ -149,7 +163,24 @@ public class MainActivity extends Activity {
         ws.setBuiltInZoomControls(true);
         ws.setDisplayZoomControls(false);
         web.setWebViewClient(new PinnedWebViewClient());
-        web.setWebChromeClient(new WebChromeClient());
+        web.setWebChromeClient(new WebChromeClient() {
+            // <input type=file> (Upload) needs an explicit chooser in a WebView.
+            @Override public boolean onShowFileChooser(WebView v, ValueCallback<Uri[]> cb, FileChooserParams params) {
+                if (pendingChooser != null) pendingChooser.onReceiveValue(null);
+                pendingChooser = cb;
+                try {
+                    Intent i = params.createIntent();
+                    i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, params.getMode() == FileChooserParams.MODE_OPEN_MULTIPLE);
+                    startActivityForResult(i, REQ_FILE_CHOOSER);
+                } catch (Exception e) {
+                    pendingChooser = null; toast("No file picker available"); return false;
+                }
+                return true;
+            }
+        });
+        // Downloads from the PC: a WebView ignores them unless we handle them ourselves.
+        web.setDownloadListener((url, ua, contentDisposition, mime, length) ->
+                downloadToPhone(url, contentDisposition, mime));
         web.setLayoutParams(new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
         colv.addView(web);
 
@@ -235,6 +266,96 @@ public class MainActivity extends Activity {
         if (Build.VERSION.SDK_INT >= 33) {
             try { requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, 7); } catch (Exception ignored) {}
         }
+    }
+
+    @Override protected void onActivityResult(int req, int res, Intent data) {
+        super.onActivityResult(req, res, data);
+        if (req != REQ_FILE_CHOOSER || pendingChooser == null) return;
+        Uri[] out = null;
+        if (res == RESULT_OK && data != null) {
+            if (data.getClipData() != null) {
+                int n = data.getClipData().getItemCount();
+                out = new Uri[n];
+                for (int i = 0; i < n; i++) out[i] = data.getClipData().getItemAt(i).getUri();
+            } else if (data.getData() != null) {
+                out = new Uri[]{ data.getData() };
+            }
+        }
+        pendingChooser.onReceiveValue(out);
+        pendingChooser = null;
+    }
+
+    // ---------- downloads (PC -> phone) ----------
+    /** Fetch the file over the pinned TLS connection and save it to Downloads/BridgeDesk. */
+    private void downloadToPhone(final String url, final String contentDisposition, final String mime) {
+        final String name = fileNameFor(url, contentDisposition, mime);
+        toast("Downloading " + name + "…");
+        new Thread(() -> {
+            HttpsURLConnection c = null;
+            try {
+                SSLContext ctx = SSLContext.getInstance("TLS");
+                ctx.init(null, new TrustManager[]{ new WsClient.PinnedTrust(store.fingerprint()) }, new SecureRandom());
+                c = (HttpsURLConnection) new URL(url).openConnection();
+                c.setSSLSocketFactory(ctx.getSocketFactory());
+                c.setHostnameVerifier((h, sess) -> true); // identity is the pinned fingerprint, not the hostname
+                c.setConnectTimeout(15000);
+                c.setReadTimeout(0);
+                int code = c.getResponseCode();
+                if (code != 200) throw new Exception("HTTP " + code);
+                String where;
+                try (InputStream in = c.getInputStream()) {
+                    where = saveToDownloads(name, in);
+                }
+                final String msg = "Saved to " + where;
+                runOnUiThread(() -> Toast.makeText(this, msg, Toast.LENGTH_LONG).show());
+            } catch (Exception e) {
+                final String msg = "Download failed: " + e.getMessage();
+                runOnUiThread(() -> Toast.makeText(this, msg, Toast.LENGTH_LONG).show());
+            } finally {
+                if (c != null) c.disconnect();
+            }
+        }, "bd-download").start();
+    }
+
+    private String fileNameFor(String url, String cd, String mime) {
+        try {
+            String p = Uri.parse(url).getQueryParameter("path");
+            if (p != null && !p.isEmpty()) {
+                String n = p.substring(Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\')) + 1);
+                if (!n.isEmpty()) return n;
+            }
+        } catch (Exception ignored) {}
+        return URLUtil.guessFileName(url, cd, mime);
+    }
+
+    private String saveToDownloads(String name, InputStream in) throws Exception {
+        byte[] buf = new byte[64 * 1024];
+        int r;
+        if (Build.VERSION.SDK_INT >= 29) {
+            ContentValues v = new ContentValues();
+            v.put(MediaStore.MediaColumns.DISPLAY_NAME, name);
+            v.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/BridgeDesk");
+            v.put(MediaStore.MediaColumns.IS_PENDING, 1);
+            Uri item = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, v);
+            if (item == null) throw new Exception("could not create file in Downloads");
+            try (OutputStream out = getContentResolver().openOutputStream(item)) {
+                while ((r = in.read(buf)) > 0) out.write(buf, 0, r);
+            } catch (Exception e) {
+                getContentResolver().delete(item, null, null);
+                throw e;
+            }
+            v.clear();
+            v.put(MediaStore.MediaColumns.IS_PENDING, 0);
+            getContentResolver().update(item, v, null, null);
+            return "Downloads/BridgeDesk/" + name;
+        }
+        File dir = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "BridgeDesk");
+        dir.mkdirs();
+        File f = new File(dir, name);
+        try (OutputStream out = new FileOutputStream(f)) {
+            while ((r = in.read(buf)) > 0) out.write(buf, 0, r);
+        }
+        return "Downloads/BridgeDesk/" + name;
     }
 
     // ---------- WebView TLS pinning ----------
