@@ -57,7 +57,8 @@ jobs:
         with: { name: apk, path: android/BridgeDesk.apk }
 
   release:
-    if: github.event_name == 'push'
+    # Publish on every push — even if the Android build failed, the PC builds still ship.
+    if: always() && github.event_name == 'push' && needs.hub.result == 'success'
     needs: [hub, android]
     runs-on: ubuntu-latest
     steps:
@@ -73,6 +74,9 @@ jobs:
             echo "tag=v${VER}-build.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
             echo "name=BridgeDesk ${VER} (build ${{ github.run_number }})" >> "$GITHUB_OUTPUT"
           fi
+          if [ "${{ needs.android.result }}" != "success" ]; then
+            echo "note=⚠️ The Android app failed to build in this run, so BridgeDesk.apk is not attached — use the APK from the previous release." >> "$GITHUB_OUTPUT"
+          fi
       - uses: actions/download-artifact@v4
         with: { path: out, merge-multiple: true }
       - uses: softprops/action-gh-release@v2
@@ -81,5 +85,6 @@ jobs:
           name: ${{ steps.v.outputs.name }}
           target_commitish: ${{ github.sha }}
           files: out/*
+          body: ${{ steps.v.outputs.note }}
           generate_release_notes: true
           make_latest: true
