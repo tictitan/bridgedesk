@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">BridgeDesk</string>
+    <string name="accessibility_desc">Lets BridgeDesk tap, swipe and type on this device when you control it from your PC. Only active while you are connected.</string>
+</resources>

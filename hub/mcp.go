@@ -1,0 +1,405 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+	"time"
+)
+
+// MCP server (JSON-RPC 2.0 over HTTP) so Claude can drive any linked device:
+// run PowerShell/shell, browse/transfer files, screenshot, and move the mouse/keyboard.
+// Bound to loopback by default; when AllowMCP is off it is disabled entirely.
+
+type mcpReq struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      json.RawMessage `json:"id"`
+	Method  string          `json:"method"`
+	Params  json.RawMessage `json:"params"`
+}
+
+func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
+	if !s.cfg.AllowMCP {
+		http.Error(w, "mcp disabled", 403)
+		return
+	}
+	// MCP is loopback-only unless the caller presents the access key (for a trusted relay).
+	if !isLoopback(r.RemoteAddr) && !s.keyOK(s.token(r)) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if r.Method == "GET" {
+		writeJSON(w, 200, map[string]any{"service": "bridgedesk-mcp", "transport": "http", "version": appVersion})
+		return
+	}
+	body, _ := io.ReadAll(io.LimitReader(r.Body, 16<<20))
+	var req mcpReq
+	if err := json.Unmarshal(body, &req); err != nil {
+		writeJSON(w, 200, mcpError(nil, -32700, "parse error"))
+		return
+	}
+	resp := s.mcpDispatch(r.Context(), req)
+	if resp != nil {
+		writeJSON(w, 200, resp)
+	} else {
+		w.WriteHeader(202) // notification
+	}
+}
+
+func mcpResult(id json.RawMessage, result any) map[string]any {
+	return map[string]any{"jsonrpc": "2.0", "id": rawID(id), "result": result}
+}
+func mcpError(id json.RawMessage, code int, msg string) map[string]any {
+	return map[string]any{"jsonrpc": "2.0", "id": rawID(id), "error": map[string]any{"code": code, "message": msg}}
+}
+func rawID(id json.RawMessage) any {
+	if len(id) == 0 {
+		return nil
+	}
+	return id
+}
+
+func (s *Server) mcpDispatch(ctx context.Context, req mcpReq) any {
+	switch req.Method {
+	case "initialize":
+		return mcpResult(req.ID, map[string]any{
+			"protocolVersion": "2024-11-05",
+			"capabilities":    map[string]any{"tools": map[string]any{}},
+			"serverInfo":      map[string]any{"name": "BridgeDesk", "version": appVersion},
+		})
+	case "notifications/initialized":
+		return nil
+	case "tools/list":
+		return mcpResult(req.ID, map[string]any{"tools": mcpTools()})
+	case "tools/call":
+		return s.mcpCallTool(ctx, req)
+	default:
+		return mcpError(req.ID, -32601, "method not found: "+req.Method)
+	}
+}
+
+func mcpTools() []map[string]any {
+	dev := map[string]any{"type": "string", "description": "Target device id or name. Use 'local' or omit for this machine; call bridge_list_devices to see others."}
+	return []map[string]any{
+		{
+			"name":        "bridge_list_devices",
+			"description": "List all machines reachable through this hub (this PC plus any linked phones/PCs), with their id, name, OS and capabilities.",
+			"inputSchema": map[string]any{"type": "object", "properties": map[string]any{}},
+		},
+		{
+			"name":        "bridge_run",
+			"description": "Run a shell command on a device and return stdout/stderr/exit code. On Windows the default shell is PowerShell (set shell='cmd' for cmd.exe); elsewhere it is bash.",
+			"inputSchema": map[string]any{"type": "object", "required": []string{"command"}, "properties": map[string]any{
+				"device":  dev,
+				"command": map[string]any{"type": "string", "description": "Command line to execute."},
+				"shell":   map[string]any{"type": "string", "enum": []string{"powershell", "pwsh", "cmd", "bash"}, "description": "Shell to use."},
+				"cwd":     map[string]any{"type": "string", "description": "Working directory."},
+				"timeout": map[string]any{"type": "integer", "description": "Timeout in seconds (default 60)."},
+			}},
+		},
+		{
+			"name":        "bridge_list_files",
+			"description": "List a directory on a device. Returns entries with name, path, dir flag, size and mtime. With no path, lists the device's home directory.",
+			"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
+				"device": dev,
+				"path":   map[string]any{"type": "string"},
+			}},
+		},
+		{
+			"name":        "bridge_read_file",
+			"description": "Read a (text) file from a device and return its contents. Best for files under ~1 MB.",
+			"inputSchema": map[string]any{"type": "object", "required": []string{"path"}, "properties": map[string]any{
+				"device": dev, "path": map[string]any{"type": "string"},
+			}},
+		},
+		{
+			"name":        "bridge_write_file",
+			"description": "Create or overwrite a text file on a device with the given content.",
+			"inputSchema": map[string]any{"type": "object", "required": []string{"path", "content"}, "properties": map[string]any{
+				"device": dev, "path": map[string]any{"type": "string"}, "content": map[string]any{"type": "string"},
+			}},
+		},
+		{
+			"name":        "bridge_transfer",
+			"description": "Copy a file from one device to another through the hub (e.g. pull a file off a phone onto the PC, or push one to it).",
+			"inputSchema": map[string]any{"type": "object", "required": []string{"fromDevice", "fromPath", "toDevice", "toPath"}, "properties": map[string]any{
+				"fromDevice": map[string]any{"type": "string"}, "fromPath": map[string]any{"type": "string"},
+				"toDevice": map[string]any{"type": "string"}, "toPath": map[string]any{"type": "string"},
+			}},
+		},
+		{
+			"name":        "bridge_screenshot",
+			"description": "Capture the current screen of a device and return it as an image.",
+			"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
+				"device": dev, "maxWidth": map[string]any{"type": "integer", "description": "Downscale to this width (default 1280)."},
+			}},
+		},
+		{
+			"name":        "bridge_input",
+			"description": "Send mouse or keyboard input to a device for remote control. kind='move'|'click'|'dblclick'|'scroll' use x,y in 0..1 screen fractions; kind='key' sends a key or combo like 'ctrl+alt+delete'; kind='type' types text.",
+			"inputSchema": map[string]any{"type": "object", "required": []string{"kind"}, "properties": map[string]any{
+				"device": dev,
+				"kind":   map[string]any{"type": "string", "enum": []string{"move", "click", "dblclick", "scroll", "key", "type"}},
+				"x":      map[string]any{"type": "number"}, "y": map[string]any{"type": "number"},
+				"button": map[string]any{"type": "string", "enum": []string{"left", "right", "middle"}},
+				"dy":     map[string]any{"type": "integer", "description": "Scroll amount for kind=scroll."},
+				"key":    map[string]any{"type": "string", "description": "Key or combo for kind=key."},
+				"text":   map[string]any{"type": "string", "description": "Text for kind=type."},
+			}},
+		},
+		{
+			"name":        "bridge_clipboard",
+			"description": "Get or set a device's clipboard text. Omit 'text' to read; provide 'text' to set.",
+			"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
+				"device": dev, "text": map[string]any{"type": "string"},
+			}},
+		},
+		{
+			"name":        "bridge_notifications",
+			"description": "List current notifications mirrored from a phone (messages, SMS codes, push prompts like Okta Verify). Each has a key, app, title, text and a list of action labels.",
+			"inputSchema": map[string]any{"type": "object", "properties": map[string]any{"device": dev}},
+		},
+		{
+			"name":        "bridge_notification_action",
+			"description": "Act on a phone notification: open it (opens the app on the phone), tap one of its actions by index (e.g. 'Approve' on an Okta Verify prompt), send an inline reply to a messaging notification, or dismiss it. Use bridge_notifications first to get the key and the actions (each has a title and a 'reply' flag).",
+			"inputSchema": map[string]any{"type": "object", "required": []string{"key"}, "properties": map[string]any{
+				"device":  dev,
+				"key":     map[string]any{"type": "string", "description": "Notification key from bridge_notifications."},
+				"action":  map[string]any{"type": "integer", "description": "Index into the actions list to trigger."},
+				"reply":   map[string]any{"type": "string", "description": "Text to send as an inline reply (use with the index of a reply action, e.g. WhatsApp 'Reply')."},
+				"open":    map[string]any{"type": "boolean", "description": "If true, open the notification (launch its app on the phone)."},
+				"dismiss": map[string]any{"type": "boolean", "description": "If true, dismiss the notification."},
+			}},
+		},
+	}
+}
+
+func (s *Server) mcpCallTool(ctx context.Context, req mcpReq) any {
+	var call struct {
+		Name string          `json:"name"`
+		Args json.RawMessage `json:"arguments"`
+	}
+	json.Unmarshal(req.Params, &call)
+	args := map[string]any{}
+	json.Unmarshal(call.Args, &args)
+	str := func(k string) string { v, _ := args[k].(string); return v }
+	dev := str("device")
+
+	textResult := func(s string) any {
+		return mcpResult(req.ID, map[string]any{"content": []map[string]any{{"type": "text", "text": s}}})
+	}
+	jsonResult := func(v any) any {
+		b, _ := json.MarshalIndent(v, "", "  ")
+		return textResult(string(b))
+	}
+	fail := func(err error) any {
+		return mcpResult(req.ID, map[string]any{"isError": true, "content": []map[string]any{{"type": "text", "text": "Error: " + err.Error()}}})
+	}
+
+	switch call.Name {
+	case "bridge_list_devices":
+		return jsonResult(s.hub.List())
+
+	case "bridge_run":
+		var out ExecResult
+		err := s.hub.Call(ctx, dev, "exec", map[string]any{
+			"command": str("command"), "shell": str("shell"), "cwd": str("cwd"),
+			"timeout": intArg(args, "timeout"),
+		}, &out)
+		if err != nil {
+			return fail(err)
+		}
+		var sb strings.Builder
+		if out.Stdout != "" {
+			sb.WriteString(out.Stdout)
+		}
+		if out.Stderr != "" {
+			sb.WriteString("\n[stderr]\n" + out.Stderr)
+		}
+		fmt.Fprintf(&sb, "\n[exit %d, %dms]", out.ExitCode, out.DurationMs)
+		if out.TimedOut {
+			sb.WriteString(" [timed out]")
+		}
+		return textResult(sb.String())
+
+	case "bridge_list_files":
+		var entries []FileEntry
+		if err := s.hub.Call(ctx, dev, "fs.list", map[string]any{"path": str("path")}, &entries); err != nil {
+			return fail(err)
+		}
+		return jsonResult(entries)
+
+	case "bridge_read_file":
+		data, err := s.pullFile(ctx, dev, str("path"), 4<<20)
+		if err != nil {
+			return fail(err)
+		}
+		return textResult(string(data))
+
+	case "bridge_write_file":
+		err := s.hub.Call(ctx, dev, "fs.write", map[string]any{
+			"path": str("path"), "offset": 0, "truncate": true, "data": b64enc([]byte(str("content"))),
+		}, nil)
+		if err != nil {
+			return fail(err)
+		}
+		return textResult("wrote " + str("path"))
+
+	case "bridge_transfer":
+		data, err := s.pullFile(ctx, str("fromDevice"), str("fromPath"), 256<<20)
+		if err != nil {
+			return fail(err)
+		}
+		if err := s.hub.Call(ctx, str("toDevice"), "fs.write", map[string]any{
+			"path": str("toPath"), "offset": 0, "truncate": true, "data": b64enc(data),
+		}, nil); err != nil {
+			return fail(err)
+		}
+		return textResult(fmt.Sprintf("copied %d bytes to %s", len(data), str("toPath")))
+
+	case "bridge_screenshot":
+		mw := intArg(args, "maxWidth")
+		if mw == 0 {
+			mw = 1280
+		}
+		var cap struct {
+			Data string `json:"data"`
+			W    int    `json:"w"`
+			H    int    `json:"h"`
+		}
+		if err := s.hub.Call(ctx, dev, "screen.capture", map[string]any{"maxWidth": mw, "quality": 70}, &cap); err != nil {
+			return fail(err)
+		}
+		return mcpResult(req.ID, map[string]any{"content": []map[string]any{
+			{"type": "image", "data": cap.Data, "mimeType": "image/jpeg"},
+			{"type": "text", "text": fmt.Sprintf("screen %dx%d", cap.W, cap.H)},
+		}})
+
+	case "bridge_input":
+		kind := str("kind")
+		switch kind {
+		case "key":
+			err := s.hub.Call(ctx, dev, "input.key", map[string]any{"key": str("key"), "action": "press"}, nil)
+			if err != nil {
+				return fail(err)
+			}
+		case "type":
+			err := s.hub.Call(ctx, dev, "input.text", map[string]any{"text": str("text")}, nil)
+			if err != nil {
+				return fail(err)
+			}
+		default:
+			btn := str("button")
+			if btn == "" {
+				btn = "left"
+			}
+			err := s.hub.Call(ctx, dev, "input.mouse", map[string]any{
+				"action": kind, "x": args["x"], "y": args["y"], "button": btn, "dy": intArg(args, "dy"),
+			}, nil)
+			if err != nil {
+				return fail(err)
+			}
+		}
+		return textResult("ok")
+
+	case "bridge_clipboard":
+		if t, ok := args["text"].(string); ok {
+			if err := s.hub.Call(ctx, dev, "clipboard.set", map[string]any{"text": t}, nil); err != nil {
+				return fail(err)
+			}
+			return textResult("clipboard set")
+		}
+		var out struct {
+			Text string `json:"text"`
+		}
+		if err := s.hub.Call(ctx, dev, "clipboard.get", nil, &out); err != nil {
+			return fail(err)
+		}
+		return textResult(out.Text)
+
+	case "bridge_notifications":
+		var out struct {
+			Notifications json.RawMessage `json:"notifications"`
+		}
+		if err := s.hub.Call(ctx, dev, "notif.list", nil, &out); err != nil {
+			return fail(err)
+		}
+		return textResult(string(out.Notifications))
+
+	case "bridge_notification_action":
+		if dismiss, _ := args["dismiss"].(bool); dismiss {
+			if err := s.hub.Call(ctx, dev, "notif.dismiss", map[string]any{"key": str("key")}, nil); err != nil {
+				return fail(err)
+			}
+			return textResult("dismissed")
+		}
+		if open, _ := args["open"].(bool); open {
+			if err := s.hub.Call(ctx, dev, "notif.open", map[string]any{"key": str("key")}, nil); err != nil {
+				return fail(err)
+			}
+			return textResult("opened on phone")
+		}
+		action := 0
+		if v, ok := args["action"]; ok {
+			action = intArg(map[string]any{"a": v}, "a")
+		}
+		if reply, ok := args["reply"].(string); ok && reply != "" {
+			if err := s.hub.Call(ctx, dev, "notif.reply", map[string]any{"key": str("key"), "action": action, "text": reply}, nil); err != nil {
+				return fail(err)
+			}
+			return textResult("reply sent")
+		}
+		if err := s.hub.Call(ctx, dev, "notif.action", map[string]any{"key": str("key"), "action": action}, nil); err != nil {
+			return fail(err)
+		}
+		return textResult("action sent")
+	}
+	return mcpError(req.ID, -32602, "unknown tool: "+call.Name)
+}
+
+func (s *Server) pullFile(ctx context.Context, device, path string, max int) ([]byte, error) {
+	d, err := s.hub.Get(device)
+	if err != nil {
+		return nil, err
+	}
+	var buf []byte
+	var offset int64
+	for len(buf) < max {
+		p, _ := json.Marshal(map[string]any{"path": path, "offset": offset, "length": 1 << 20})
+		cctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+		raw, err := d.Call(cctx, "fs.read", p)
+		cancel()
+		if err != nil {
+			return nil, err
+		}
+		var chunk struct {
+			Data string `json:"data"`
+			EOF  bool   `json:"eof"`
+		}
+		json.Unmarshal(raw, &chunk)
+		b, _ := b64dec(chunk.Data)
+		buf = append(buf, b...)
+		offset += int64(len(b))
+		if chunk.EOF || len(b) == 0 {
+			break
+		}
+	}
+	return buf, nil
+}
+
+func intArg(m map[string]any, k string) int {
+	switch v := m[k].(type) {
+	case float64:
+		return int(v)
+	case int:
+		return v
+	}
+	return 0
+}
+
+func isLoopback(addr string) bool {
+	return strings.HasPrefix(addr, "127.") || strings.HasPrefix(addr, "[::1]") || strings.HasPrefix(addr, "localhost")
+}
