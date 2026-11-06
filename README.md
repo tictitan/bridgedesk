@@ -19,6 +19,22 @@ And a bonus the commercial tools don't have: a built-in **MCP server**, so **Cla
 
 ---
 
+## Download
+
+Grab the latest build from the **[Releases page](../../releases/latest)**:
+
+| File | Run it on |
+|---|---|
+| `BridgeDesk.exe` | Windows PC (x64) |
+| `BridgeDesk-arm64.exe` | Windows on ARM |
+| `bridgedesk-linux` | Linux (x64) |
+| `bridgedesk-macos` | Mac (Apple Silicon) |
+| `BridgeDesk.apk` | Android phone |
+
+Or build it yourself — see [Building from source](#building-from-source). Contributions, issues and ideas are welcome.
+
+---
+
 ## What's in the box
 
 ```

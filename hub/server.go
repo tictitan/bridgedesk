@@ -355,6 +355,8 @@ func (s *Server) handleFleetShares(w http.ResponseWriter, r *http.Request) {
 		Name     string `json:"name"`
 		Path     string `json:"path"`
 		UNC      string `json:"unc"`
+		User     string `json:"user,omitempty"`
+		Pass     string `json:"pass,omitempty"`
 	}
 	self := s.hub.local.Info().ID
 	var mu sync.Mutex
@@ -382,7 +384,7 @@ func (s *Server) handleFleetShares(w http.ResponseWriter, r *http.Request) {
 			json.Unmarshal(raw, &shares)
 			mu.Lock()
 			for _, sh := range shares {
-				rows = append(rows, row{d.ID, d.Name, d.Kind, sh.Name, sh.Path, sh.UNC})
+				rows = append(rows, row{d.ID, d.Name, d.Kind, sh.Name, sh.Path, sh.UNC, sh.User, sh.Pass})
 			}
 			mu.Unlock()
 		}()

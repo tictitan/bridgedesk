@@ -356,7 +356,7 @@ func (d *LocalDevice) call(ctx context.Context, method string, params json.RawMe
 		if err := d.need("files"); err != nil {
 			return nil, err
 		}
-		return shareList(ctx)
+		return shareList(ctx, d.cfg.ShareUser, d.cfg.SharePass)
 	case "share.create":
 		if err := d.need("files"); err != nil {
 			return nil, err
@@ -366,7 +366,7 @@ func (d *LocalDevice) call(ctx context.Context, method string, params json.RawMe
 			Readonly   bool
 		}
 		want(params, &p)
-		return shareCreate(ctx, p.Name, p.Path, p.Readonly)
+		return shareCreate(ctx, p.Name, p.Path, p.Readonly, d.cfg.ShareUser, d.cfg.SharePass)
 	case "share.remove":
 		if err := d.need("files"); err != nil {
 			return nil, err

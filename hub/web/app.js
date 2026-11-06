@@ -650,7 +650,7 @@ const Shares = {
       const btn = document.createElement("button"); btn.className = "primary"; btn.textContent = "Mount here";
       btn.onclick = async () => {
         btn.disabled = true; btn.textContent = "Mounting…";
-        try { const r = await rpc("share.mount", { source: s.unc, mountAs: "auto" }, "local");
+        try { const r = await rpc("share.mount", { source: s.unc, mountAs: "auto", user: s.user || "", pass: s.pass || "" }, "local");
           $("#shMsg").innerHTML = `✓ Mounted <span class="mono">${esc(s.unc)}</span> at <span class="mono">${esc(r.mounted || "")}</span> on this PC`;
           btn.textContent = "Mounted ✓";
         } catch (e) { $("#shMsg").textContent = "⚠ " + e.message; btn.disabled = false; btn.textContent = "Mount here"; }

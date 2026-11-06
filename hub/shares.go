@@ -19,6 +19,8 @@ type ShareInfo struct {
 	Name string `json:"name"`
 	Path string `json:"path"`
 	UNC  string `json:"unc,omitempty"`
+	User string `json:"user,omitempty"` // dedicated account for seamless mounting
+	Pass string `json:"pass,omitempty"`
 }
 
 func shareExec(ctx context.Context, name string, args ...string) (string, error) {
@@ -41,8 +43,9 @@ func firstIP() string {
 	return host
 }
 
-// shareCreate exposes a folder as an SMB share (Windows). Returns the UNC path to mount elsewhere.
-func shareCreate(ctx context.Context, name, path string, readonly bool) (map[string]any, error) {
+// shareCreate exposes a folder as an SMB share (Windows). It provisions a dedicated local account
+// and grants it to the share, so other fleet machines mount it seamlessly (no credential prompt).
+func shareCreate(ctx context.Context, name, path string, readonly bool, user, pass string) (map[string]any, error) {
 	name = strings.TrimSpace(name)
 	if name == "" || path == "" {
 		return nil, fmt.Errorf("share name and folder path are required")
@@ -52,25 +55,37 @@ func shareCreate(ctx context.Context, name, path string, readonly bool) (map[str
 	}
 	switch runtime.GOOS {
 	case "windows":
-		access := "-FullAccess Everyone"
+		perm := "M" // modify
+		shareAccess := "-FullAccess"
 		if readonly {
-			access = "-ReadAccess Everyone"
+			perm = "R"
+			shareAccess = "-ReadAccess"
 		}
-		ps := fmt.Sprintf("New-SmbShare -Name '%s' -Path '%s' %s -ErrorAction Stop | Out-Null; 'ok'",
-			psEscape(name), psEscape(path), access)
+		// 1) ensure the dedicated local account exists (hidden from the login screen),
+		// 2) grant it NTFS access to the folder, 3) create the share granting that account.
+		ps := fmt.Sprintf(`$ErrorActionPreference='Stop'
+$u='%s'; $p=ConvertTo-SecureString '%s' -AsPlainText -Force
+if (Get-LocalUser -Name $u -ErrorAction SilentlyContinue) { Set-LocalUser -Name $u -Password $p }
+else { New-LocalUser -Name $u -Password $p -PasswordNeverExpires -AccountNeverExpires -UserMayNotChangePassword -Description 'BridgeDesk share account' | Out-Null }
+# keep the account off the sign-in screen
+reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\SpecialAccounts\UserList" /v $u /t REG_DWORD /d 0 /f | Out-Null
+icacls "%s" /grant ("${u}:(OI)(CI)%s") | Out-Null
+if (Get-SmbShare -Name '%s' -ErrorAction SilentlyContinue) { Remove-SmbShare -Name '%s' -Force | Out-Null }
+New-SmbShare -Name '%s' -Path '%s' %s $u -ErrorAction Stop | Out-Null
+'ok'`,
+			psEscape(user), psEscape(pass), psEscape(path), perm,
+			psEscape(name), psEscape(name), psEscape(name), psEscape(path), shareAccess)
 		out, err := shareExec(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", ps)
 		if err != nil {
-			if strings.Contains(out, "Access is denied") || strings.Contains(strings.ToLower(out), "administrator") {
-				return nil, fmt.Errorf("creating an SMB share needs administrator — restart BridgeDesk as administrator (tray menu), then retry")
-			}
-			if strings.Contains(out, "already exists") {
-				return nil, fmt.Errorf("a share named %q already exists", name)
+			low := strings.ToLower(out)
+			if strings.Contains(low, "access is denied") || strings.Contains(low, "administrator") || strings.Contains(low, "denied") {
+				return nil, fmt.Errorf("creating an SMB share needs administrator — use the tray menu → Restart as administrator, then retry")
 			}
 			return nil, fmt.Errorf("%s", strings.TrimSpace(out))
 		}
 		unc := fmt.Sprintf(`\\%s\%s`, firstIP(), name)
-		return map[string]any{"name": name, "path": path, "unc": unc,
-			"mountHint": fmt.Sprintf(`On another PC: net use Z: %s   (or map it in Explorer)`, unc)}, nil
+		return map[string]any{"name": name, "path": path, "unc": unc, "user": user,
+			"mountHint": "Other fleet machines can now mount this in one click — no password needed."}, nil
 	case "linux", "darwin":
 		return nil, fmt.Errorf("creating an SMB share on %s needs Samba configured separately; use the built-in WebDAV drive instead (Settings shows its URL), or mount a share created on a Windows PC", runtime.GOOS)
 	}
@@ -89,10 +104,13 @@ func shareRemove(ctx context.Context, name string) (map[string]any, error) {
 	return map[string]any{"removed": name}, nil
 }
 
-func shareList(ctx context.Context) ([]ShareInfo, error) {
+// shareList returns the SMB shares this machine offers. user/pass are the dedicated-account
+// credentials attached so fleet machines can auto-mount without a prompt.
+func shareList(ctx context.Context, user, pass string) ([]ShareInfo, error) {
 	switch runtime.GOOS {
 	case "windows":
-		ps := "Get-SmbShare | Where-Object { $_.Name -notlike '*$' } | ForEach-Object { $_.Name + '|' + $_.Path }"
+		// Only list shares granted to our dedicated account (the ones we can hand out credentials for).
+		ps := fmt.Sprintf("Get-SmbShare | Where-Object { $_.Name -notlike '*$' } | ForEach-Object { $n=$_.Name; $ok=@(Get-SmbShareAccess -Name $n | Where-Object { $_.AccountName -like '*\\%s' -or $_.AccountName -eq '%s' }).Count -gt 0; $n + '|' + $_.Path + '|' + $ok }", psEscape(user), psEscape(user))
 		out, _ := shareExec(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", ps)
 		var list []ShareInfo
 		ip := firstIP()
@@ -101,8 +119,13 @@ func shareList(ctx context.Context) ([]ShareInfo, error) {
 			if line == "" || !strings.Contains(line, "|") {
 				continue
 			}
-			parts := strings.SplitN(line, "|", 2)
-			list = append(list, ShareInfo{Name: parts[0], Path: parts[1], UNC: fmt.Sprintf(`\\%s\%s`, ip, parts[0])})
+			parts := strings.SplitN(line, "|", 3)
+			si := ShareInfo{Name: parts[0], Path: parts[1], UNC: fmt.Sprintf(`\\%s\%s`, ip, parts[0])}
+			if len(parts) == 3 && strings.EqualFold(strings.TrimSpace(parts[2]), "true") {
+				si.User = user
+				si.Pass = pass
+			}
+			list = append(list, si)
 		}
 		return list, nil
 	default:
@@ -133,7 +156,7 @@ func shareMount(ctx context.Context, source, mountAs, user, pass string) (map[st
 			}
 			return map[string]any{"mounted": firstDriveLetter(out, tgt), "source": source}, nil
 		}
-		// net use {Z:|*} \\server\share [password] [/user:user] /persistent:yes
+		// net use {Z:|*} \\server\share [password] [/user:server\user] /persistent:yes
 		tgt := mountAs
 		if auto {
 			tgt = "*" // let Windows pick the next free drive letter
@@ -143,6 +166,12 @@ func shareMount(ctx context.Context, source, mountAs, user, pass string) (map[st
 			args = append(args, pass)
 		}
 		if user != "" {
+			// a local account on the server must be qualified with the server's host/IP
+			if !strings.ContainsAny(user, `\@`) {
+				if host := uncHost(unc); host != "" {
+					user = host + `\` + user
+				}
+			}
 			args = append(args, "/user:"+user)
 		}
 		args = append(args, "/persistent:yes")
@@ -231,6 +260,15 @@ func firstDriveLetter(out, fallback string) string {
 		return "(auto)"
 	}
 	return fallback
+}
+
+// uncHost extracts the server host from \\host\share.
+func uncHost(unc string) string {
+	s := strings.TrimPrefix(strings.ReplaceAll(unc, "/", `\`), `\\`)
+	if i := strings.Index(s, `\`); i >= 0 {
+		return s[:i]
+	}
+	return s
 }
 
 func shareBaseName(source string) string {

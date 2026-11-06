@@ -46,6 +46,8 @@ type Config struct {
 	AllowFiles  bool         `json:"allowFiles"`
 	AllowMCP    bool         `json:"allowMcp"`
 	MirrorNotif bool         `json:"mirrorNotif"` // raise a desktop toast when a linked phone notification arrives
+	ShareUser   string       `json:"shareUser"`   // dedicated local account used for seamless SMB shares
+	SharePass   string       `json:"sharePass"`   // its password (so the fleet can auto-mount without a prompt)
 	InboxDir    string       `json:"inboxDir"`    // where files shared from phones land
 	Links       []LinkTarget `json:"links"`       // other hubs THIS machine dials out to (we become a device there)
 	Peers       []LinkTarget `json:"peers"`       // other PCs this console controls (they dial back to us)
@@ -123,6 +125,13 @@ func loadConfig() (*Config, error) {
 	}
 	if c.AccessKey == "" {
 		c.AccessKey = randomKey(16)
+	}
+	if c.ShareUser == "" {
+		c.ShareUser = "BridgeDeskSvc"
+	}
+	if c.SharePass == "" {
+		// Strong password that satisfies Windows local-account complexity rules.
+		c.SharePass = "Bd1!" + randomKey(16)
 	}
 	return c, c.Save()
 }
