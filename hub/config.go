@@ -24,7 +24,7 @@ const (
 	defaultLANPort   = 47810 // HTTPS + WSS for phones / other PCs
 	defaultLocalPort = 47811 // plain HTTP, bound to 127.0.0.1 only (dashboard + MCP)
 	discoveryPort    = 47812 // UDP LAN discovery
-	appVersion       = "1.0.0"
+	appVersion       = "1.1.0"
 )
 
 // LinkTarget is a remote hub this machine registers itself with (e.g. a cloud relay or another PC).

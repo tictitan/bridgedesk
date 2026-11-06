@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"image"
 	"image/jpeg"
 	"io"
@@ -306,15 +307,31 @@ func (d *LocalDevice) call(ctx context.Context, method string, params json.RawMe
 			return nil, err
 		}
 		var p struct {
-			Quality  int `json:"quality"`
-			MaxWidth int `json:"maxWidth"`
+			Quality  int    `json:"quality"`
+			MaxWidth int    `json:"maxWidth"`
+			Monitor  int    `json:"monitor"` // 0 = primary, n = other display, -1 = all displays
+			Since    string `json:"since"`   // hash of the client's last frame: unchanged screens skip encoding
 		}
 		want(params, &p)
-		jpg, w, h, sw, sh, err := captureJPEG(p.Quality, p.MaxWidth)
+		fr, err := captureFrame(p.Quality, p.MaxWidth, p.Monitor, p.Since)
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"data": base64.StdEncoding.EncodeToString(jpg), "width": sw, "height": sh, "w": w, "h": h, "mime": "image/jpeg"}, nil
+		if fr.same {
+			return map[string]any{"same": true, "hash": fr.hash}, nil
+		}
+		return map[string]any{"data": base64.StdEncoding.EncodeToString(fr.jpg), "width": fr.sw, "height": fr.sh,
+			"w": fr.w, "h": fr.h, "mime": "image/jpeg", "hash": fr.hash, "monitor": fr.mon}, nil
+	case "screen.monitors":
+		if err := d.need("screen"); err != nil {
+			return nil, err
+		}
+		return listMonitors(), nil
+	case "session.lock":
+		if err := d.need("screen"); err != nil {
+			return nil, err
+		}
+		return true, lockSession()
 	case "input.mouse":
 		if err := d.need("screen"); err != nil {
 			return nil, err
@@ -393,12 +410,24 @@ func (d *LocalDevice) call(ctx context.Context, method string, params json.RawMe
 }
 
 type MouseInput struct {
-	X      float64 `json:"x"` // 0..1 normalized across the screen
-	Y      float64 `json:"y"`
-	Action string  `json:"action"` // move | down | up | click | dblclick | scroll
-	Button string  `json:"button"` // left | right | middle
-	DeltaX int     `json:"dx"`
-	DeltaY int     `json:"dy"`
+	X       float64 `json:"x"` // 0..1 normalized across the screen
+	Y       float64 `json:"y"`
+	Action  string  `json:"action"` // move | down | up | click | dblclick | scroll
+	Button  string  `json:"button"` // left | right | middle
+	DeltaX  int     `json:"dx"`
+	DeltaY  int     `json:"dy"`
+	Monitor int     `json:"monitor"` // which display x,y refer to (0 = primary, -1 = all)
+}
+
+// Monitor is one physical display, in virtual-desktop pixels.
+type Monitor struct {
+	Index   int    `json:"index"`
+	X       int    `json:"x"`
+	Y       int    `json:"y"`
+	W       int    `json:"w"`
+	H       int    `json:"h"`
+	Primary bool   `json:"primary"`
+	Name    string `json:"name"`
 }
 
 func randHex(n int) string {
@@ -546,29 +575,52 @@ func fsRoots(cfg *Config) []Root {
 	return roots
 }
 
-func captureJPEG(quality, maxWidth int) (jpg []byte, w, h, sw, sh int, err error) {
-	img, err := captureScreen()
+type frame struct {
+	jpg          []byte
+	w, h, sw, sh int
+	mon          int
+	hash         string
+	same         bool
+}
+
+// captureFrame grabs a display and JPEG-encodes it, unless it is identical to the client's last frame.
+func captureFrame(quality, maxWidth, monitor int, since string) (*frame, error) {
+	img, m, err := captureMonitor(monitor)
 	if err != nil {
-		return nil, 0, 0, 0, 0, err
-	}
-	b := img.Bounds()
-	sw, sh = b.Dx(), b.Dy()
-	var out image.Image = img
-	if maxWidth > 0 && sw > maxWidth {
-		out = downscale(img, maxWidth)
+		return nil, err
 	}
 	if quality <= 0 || quality > 95 {
 		quality = 60
 	}
+	b := img.Bounds()
+	fr := &frame{sw: b.Dx(), sh: b.Dy(), mon: m.Index}
+	fr.hash = fmt.Sprintf("%d.%d.%d.%08x", monitor, quality, maxWidth, crc32.ChecksumIEEE(img.Pix))
+	if since != "" && since == fr.hash {
+		fr.same = true
+		return fr, nil
+	}
+	var out image.Image = img
+	if maxWidth > 0 && fr.sw > maxWidth {
+		out = downscale(img, maxWidth)
+	}
 	var buf bytes.Buffer
 	if err := jpeg.Encode(&buf, out, &jpeg.Options{Quality: quality}); err != nil {
-		return nil, 0, 0, 0, 0, err
+		return nil, err
 	}
 	ob := out.Bounds()
-	return buf.Bytes(), ob.Dx(), ob.Dy(), sw, sh, nil
+	fr.jpg, fr.w, fr.h = buf.Bytes(), ob.Dx(), ob.Dy()
+	return fr, nil
 }
 
-// downscale does a fast box-filter-ish nearest sampling (good enough for live streaming).
+func captureJPEG(quality, maxWidth int) (jpg []byte, w, h, sw, sh int, err error) {
+	fr, err := captureFrame(quality, maxWidth, 0, "")
+	if err != nil {
+		return nil, 0, 0, 0, 0, err
+	}
+	return fr.jpg, fr.w, fr.h, fr.sw, fr.sh, nil
+}
+
+// downscale resizes for streaming, averaging a 2x2 source block per pixel so small text stays legible.
 func downscale(src *image.RGBA, maxW int) *image.RGBA {
 	sb := src.Bounds()
 	sw, sh := sb.Dx(), sb.Dy()
@@ -577,11 +629,25 @@ func downscale(src *image.RGBA, maxW int) *image.RGBA {
 	dst := image.NewRGBA(image.Rect(0, 0, dw, dh))
 	for y := 0; y < dh; y++ {
 		sy := y * sh / dh
-		srow := src.Pix[sy*src.Stride:]
+		sy2 := sy + 1
+		if sy2 >= sh {
+			sy2 = sy
+		}
+		r0 := src.Pix[sy*src.Stride:]
+		r1 := src.Pix[sy2*src.Stride:]
 		drow := dst.Pix[y*dst.Stride:]
 		for x := 0; x < dw; x++ {
-			sx := x * sw / dw * 4
-			copy(drow[x*4:x*4+4], srow[sx:sx+4])
+			sx := x * sw / dw
+			sx2 := sx + 1
+			if sx2 >= sw {
+				sx2 = sx
+			}
+			a, b := sx*4, sx2*4
+			d := drow[x*4 : x*4+4]
+			for c := 0; c < 3; c++ {
+				d[c] = uint8((uint(r0[a+c]) + uint(r0[b+c]) + uint(r1[a+c]) + uint(r1[b+c]) + 2) >> 2)
+			}
+			d[3] = 0xFF
 		}
 	}
 	return dst

@@ -11,8 +11,8 @@ import (
 	"strings"
 )
 
-func platformInit()         {}
-func attachParentConsole()  {}
+func platformInit()           {}
+func attachParentConsole()    {}
 func showMessage(_, _ string) {}
 
 func osDescription() string {
@@ -52,8 +52,10 @@ func openTarget(target string) error {
 	return exec.Command(bin, target).Start()
 }
 
-func setAutostart(enable bool) error { return fmt.Errorf("autostart not implemented on %s", runtime.GOOS) }
-func autostartEnabled() bool         { return false }
+func setAutostart(enable bool) error {
+	return fmt.Errorf("autostart not implemented on %s", runtime.GOOS)
+}
+func autostartEnabled() bool { return false }
 
 // desktopToast shows a native notification where a tool is available (notify-send / terminal-notifier).
 func desktopToast(title, text string) {
@@ -88,9 +90,21 @@ func captureScreen() (*image.RGBA, error) {
 	return nil, fmt.Errorf("screen capture not supported on %s", runtime.GOOS)
 }
 
-func doMouse(MouseInput) error       { return fmt.Errorf("input not supported on %s", runtime.GOOS) }
+func listMonitors() []Monitor {
+	w, h := screenSize()
+	return []Monitor{{W: w, H: h, Primary: true, Name: "primary"}}
+}
+
+func captureMonitor(int) (*image.RGBA, Monitor, error) {
+	img, err := captureScreen()
+	return img, Monitor{Primary: true}, err
+}
+
+func lockSession() error { return fmt.Errorf("lock not supported on %s", runtime.GOOS) }
+
+func doMouse(MouseInput) error        { return fmt.Errorf("input not supported on %s", runtime.GOOS) }
 func doKeyCombo(string, string) error { return fmt.Errorf("input not supported on %s", runtime.GOOS) }
-func typeText(string) error          { return fmt.Errorf("input not supported on %s", runtime.GOOS) }
+func typeText(string) error           { return fmt.Errorf("input not supported on %s", runtime.GOOS) }
 
 func clipboardGet() (string, error) {
 	for _, c := range [][]string{{"pbpaste"}, {"xclip", "-selection", "clipboard", "-o"}, {"xsel", "-b"}, {"wl-paste"}} {

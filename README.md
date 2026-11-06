@@ -129,6 +129,18 @@ Tap **Phone access** and turn on:
 
 Now, on the PC dashboard, switch the device selector (top-left) to your phone and use the **Desktop**, **Files**, **Terminal**, **Alerts** tabs against the phone.
 
+### Remote desktop tips
+
+The **Desktop** tab streams the screen and sends your mouse, touch and keyboard live:
+
+- **Multiple monitors** — pick *Screen 1 / Screen 2 / All screens*; clicks land on the right display.
+- **Quality presets** — *Fast*, *Balanced*, *Sharp* or *Custom* (JPEG quality, width, FPS cap). Unchanged frames aren't re-sent, so an idle screen costs almost no bandwidth. The status line shows fps, KB/s and latency.
+- **Touch (phone/tablet → PC)** — tap = click, hold = right-click, drag = drag/select, two fingers = scroll. The ⌨ button opens the phone keyboard.
+- **Keyboard** — type normally (any layout, accents, AltGr); shortcuts like Ctrl+C, Alt+Tab, Win+R pass through. The **Keys** menu sends the ones your browser would swallow: Ctrl+Alt+Del, Task Manager, Win key, Alt+F4, Print Screen, media/volume keys, **Lock the PC**.
+- **Clipboard** — 📋 sends your clipboard to the PC and pastes it; ⧉ copies the PC's clipboard to you; **Aa** types a block of text.
+- **Screenshot** 📷, **fit / actual size**, and **full screen** (also works inside the Android app).
+- The remote mouse pointer is drawn into the stream.
+
 ### Notifications & app prompts (e.g. Okta)
 
 Once *Mirror notifications* is on, the PC dashboard's **Alerts** tab shows the phone's live notifications — texts, chat messages, SMS 2FA codes, and push prompts such as **Okta Verify** or Microsoft Authenticator. Each notification shows its action buttons, so you can tap **"Yes, it's me" / "Approve"** straight from the PC, or dismiss it — without picking up the phone. Turn on **Settings → Mirror phone notifications** (or the "toast on this PC" checkbox in Alerts) to also get a native Windows pop-up for each one.

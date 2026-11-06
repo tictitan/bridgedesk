@@ -62,19 +62,40 @@
 
     <!-- Desktop -->
     <div class="page" data-page="desktop">
-      <div class="toolbar">
-        <button id="dStart" class="primary">Start</button>
-        <button id="dStop">Stop</button>
-        <label class="hint">Quality <input id="dQual" type="range" min="20" max="90" value="60"></label>
-        <label class="hint">Width <select id="dWidth"><option>960</option><option selected>1280</option><option>1600</option><option>1920</option></select></label>
+      <div class="toolbar dtools">
+        <button id="dStart" class="primary" title="Start viewing">&#9654; Start</button>
+        <button id="dStop" title="Stop viewing">&#9632; Stop</button>
+        <select id="dMon" title="Which screen to show" hidden></select>
+        <select id="dPreset" title="Picture quality vs. speed">
+          <option value="fast">Fast</option>
+          <option value="balanced" selected>Balanced</option>
+          <option value="sharp">Sharp</option>
+          <option value="custom">Custom&hellip;</option>
+        </select>
+        <span id="dCustom" class="dgroup" hidden>
+          <label class="hint">Quality <input id="dQual" type="range" min="20" max="90" value="60"></label>
+          <label class="hint">Width <select id="dWidth"><option>960</option><option selected>1280</option><option>1600</option><option>1920</option><option value="0">Full</option></select></label>
+          <label class="hint">FPS <select id="dFpsCap"><option>5</option><option>10</option><option selected>15</option><option>20</option><option>30</option></select></label>
+        </span>
         <span class="grow"></span>
-        <button id="dCad">Ctrl+Alt+Del</button>
-        <label class="hint"><input type="checkbox" id="dCtrl" checked> control</label>
+        <span class="dgroup">
+          <select id="dKeys" title="Send a key or shortcut"></select>
+          <button id="dKbd" class="icon" title="Show keyboard (phones/tablets)">&#9000;</button>
+          <button id="dType" class="icon" title="Type a block of text on the device">Aa</button>
+          <button id="dPaste" class="icon" title="Send my clipboard to the device and paste it">&#128203;</button>
+          <button id="dCopy" class="icon" title="Copy the device's clipboard here">&#10697;</button>
+          <button id="dShot" class="icon" title="Save a screenshot">&#128247;</button>
+          <button id="dFit" class="icon" title="Fit to window / actual size">&#10530;</button>
+          <button id="dFull" class="icon" title="Full screen">&#9974;</button>
+          <label class="hint" title="Send mouse, touch and keyboard to the device"><input type="checkbox" id="dCtrl" checked> control</label>
+        </span>
         <span id="dFps" class="hint"></span>
       </div>
       <div id="screenWrap">
-        <img id="screen" alt="" hidden>
-        <div id="screenOff">Press <b>Start</b> to view and control this device's screen.<br><span class="hint">Mouse, scroll and keyboard are sent live when “control” is on.</span></div>
+        <img id="screen" alt="" hidden draggable="false">
+        <textarea id="dKbdInput" aria-label="Keyboard input" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false"></textarea>
+        <div id="screenOff">Press <b>Start</b> to view and control this device's screen.<br>
+          <span class="hint">Mouse: click, right-click, drag, wheel &middot; Touch: tap = click, hold = right-click, drag = drag, two fingers = scroll &middot; Keyboard and shortcuts are sent live while &ldquo;control&rdquo; is on.</span></div>
       </div>
     </div>
 

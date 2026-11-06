@@ -283,85 +283,322 @@ const Files = {
 
 /* ---------- Desktop ---------- */
 const Desktop = {
-  running: false, frames: 0, lastT: 0, inflight: false,
+  running: false, gen: 0, hash: "", mon: 0, fit: true,
+  frames: 0, same: 0, bytes: 0, lat: 0, lastT: 0,
+  pts: new Map(), touch: null, lpT: null, textQ: "", textT: null, kbdPrev: "",
+  presets: { fast: { q: 40, w: 960, fps: 10 }, balanced: { q: 60, w: 1280, fps: 15 }, sharp: { q: 80, w: 1920, fps: 20 } },
+  pcKeys: [
+    ["", "Keys…"], ["ctrl+alt+delete", "Ctrl+Alt+Del"], ["win", "Windows key"], ["alt+tab", "Alt+Tab"],
+    ["ctrl+shift+escape", "Task Manager"], ["win+d", "Show desktop"], ["win+e", "File Explorer"], ["win+r", "Run…"],
+    ["alt+f4", "Close window (Alt+F4)"], ["win+up", "Maximize window"], ["win+shift+s", "Snipping tool"],
+    ["printscreen", "Print Screen"], ["ctrl+c", "Copy (Ctrl+C)"], ["ctrl+v", "Paste (Ctrl+V)"], ["ctrl+z", "Undo (Ctrl+Z)"],
+    ["ctrl+a", "Select all"], ["escape", "Esc"], ["f5", "F5 / refresh"], ["f11", "F11"],
+    ["volumeup", "Volume up"], ["volumedown", "Volume down"], ["volumemute", "Mute"], ["mediaplaypause", "Play / pause"],
+    ["@lock", "Lock the PC"],
+  ],
+  phoneKeys: [
+    ["", "Buttons…"], ["home", "Home"], ["back", "Back"], ["recents", "Recent apps"],
+    ["notifications", "Notifications"], ["quicksettings", "Quick settings"], ["power", "Power menu"], ["lock", "Lock screen"],
+  ],
   isPhone() { return activeDev().kind === "android"; },
+  ctrlOn() { return $("#dCtrl").checked; },
+  settings() {
+    const p = $("#dPreset").value;
+    if (this.presets[p]) return this.presets[p];
+    return { q: +$("#dQual").value, w: +$("#dWidth").value, fps: +$("#dFpsCap").value };
+  },
+  save() {
+    try { localStorage.setItem("bd.desk", JSON.stringify({ preset: $("#dPreset").value, q: $("#dQual").value, w: $("#dWidth").value, fps: $("#dFpsCap").value, fit: this.fit })); } catch (e) {}
+  },
+  restore() {
+    try {
+      const s = JSON.parse(localStorage.getItem("bd.desk") || "null"); if (!s) return;
+      if (s.preset) $("#dPreset").value = s.preset;
+      if (s.q) $("#dQual").value = s.q; if (s.w != null) $("#dWidth").value = s.w; if (s.fps) $("#dFpsCap").value = s.fps;
+      if (s.fit === false) this.fit = false;
+    } catch (e) {}
+  },
+  mouse(p) { return rpc("input.mouse", Object.assign({ monitor: this.mon }, p)).catch(() => {}); },
+  key(k) { this.flushText(); return rpc("input.key", { key: k, action: "press" }).catch((e) => toast(e.message, true)); },
+  typeText(t) { if (!t) return; this.textQ += t; if (!this.textT) this.textT = setTimeout(() => this.flushText(), 15); },
+  flushText() {
+    clearTimeout(this.textT); this.textT = null;
+    const t = this.textQ; this.textQ = ""; if (!t) return;
+    if (this.isPhone()) { rpc("input.text", { text: t }).catch(() => {}); return; }
+    rpc("input.text", { text: t }).catch((e) => toast(e.message, true));
+  },
+  fillKeys() {
+    const sel = $("#dKeys"); sel.innerHTML = "";
+    for (const [v, label] of (this.isPhone() ? this.phoneKeys : this.pcKeys)) { const o = document.createElement("option"); o.value = v; o.textContent = label; sel.appendChild(o); }
+  },
+  applyFit() {
+    $("#screenWrap").classList.toggle("actual", !this.fit);
+    $("#dFit").title = this.fit ? "Showing: fit to window — click for actual size" : "Showing: actual size — click to fit";
+  },
   bind() {
+    this.restore();
+    const syncPreset = () => { $("#dCustom").hidden = $("#dPreset").value !== "custom"; this.hash = ""; this.save(); };
+    $("#dPreset").onchange = syncPreset; syncPreset();
+    for (const id of ["#dQual", "#dWidth", "#dFpsCap"]) $(id).onchange = () => { this.hash = ""; this.save(); };
     $("#dStart").onclick = () => this.start();
     $("#dStop").onclick = () => this.stop();
-    $("#dCad").onclick = () => rpc("input.key", { key: this.isPhone() ? "home" : "ctrl+alt+delete", action: "press" }).catch(e => toast(e.message, true));
+    $("#dMon").onchange = (e) => { this.mon = +e.target.value; this.hash = ""; };
+    $("#dCtrl").onchange = () => $("#screenWrap").classList.toggle("noctl", !this.ctrlOn());
+    $("#dKeys").onchange = async (e) => {
+      const v = e.target.value; e.target.value = ""; if (!v) return;
+      if (v === "@lock") { rpc("session.lock", {}).then(() => toast("PC locked")).catch((er) => toast(er.message, true)); return; }
+      this.key(v);
+    };
+    $("#dType").onclick = () => {
+      const t = prompt("Text to type on the device (new lines press Enter):"); if (t) { this.typeText(t); this.flushText(); }
+    };
+    $("#dPaste").onclick = async () => {
+      let t = null;
+      try { t = await navigator.clipboard.readText(); } catch (e) {}
+      if (t == null || t === "") t = prompt("Paste the text to send to the device's clipboard:");
+      if (!t) return;
+      try {
+        await rpc("clipboard.set", { text: t });
+        if (!this.isPhone()) { await rpc("input.key", { key: "ctrl+v", action: "press" }); toast("Pasted on the device"); }
+        else toast("Copied to the phone's clipboard — long-press a field to paste");
+      } catch (e) { toast(e.message, true); }
+    };
+    $("#dCopy").onclick = async () => {
+      try {
+        const r = await rpc("clipboard.get", {}); const t = (r && r.text != null) ? r.text : (typeof r === "string" ? r : "");
+        try { await navigator.clipboard.writeText(t); toast("Device clipboard copied here"); }
+        catch (e) { prompt("Device clipboard (copy it from here):", t); }
+      } catch (e) { toast(e.message, true); }
+    };
+    $("#dShot").onclick = () => {
+      const img = $("#screen"); if (!img.src || img.hidden) { toast("Start the screen first", true); return; }
+      const a = document.createElement("a"); a.href = img.src;
+      a.download = "screenshot-" + (activeDev().name || "device").replace(/[^\w.-]+/g, "_") + "-" + new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19) + ".jpg";
+      document.body.appendChild(a); a.click(); a.remove();
+    };
+    $("#dFit").onclick = () => { this.fit = !this.fit; this.applyFit(); this.save(); };
+    this.applyFit();
+    $("#dFull").onclick = () => {
+      const on = !document.body.classList.contains("desk-full");
+      document.body.classList.toggle("desk-full", on);
+      try {
+        if (on && document.documentElement.requestFullscreen) document.documentElement.requestFullscreen().catch(() => {});
+        if (!on && document.fullscreenElement) document.exitFullscreen().catch(() => {});
+      } catch (e) {}
+    };
+    document.addEventListener("fullscreenchange", () => { if (!document.fullscreenElement) document.body.classList.remove("desk-full"); });
+
+    // ---- on-screen keyboard (phones/tablets): a hidden textarea, diffed on every input ----
+    const kbd = $("#dKbdInput"); const SENT = "                ";
+    const resetKbd = () => { kbd.value = SENT; this.kbdPrev = SENT; try { kbd.setSelectionRange(SENT.length, SENT.length); } catch (e) {} };
+    $("#dKbd").onclick = () => { if (!this.running) { toast("Start the screen first", true); return; } resetKbd(); kbd.focus(); };
+    kbd.addEventListener("input", () => {
+      const prev = this.kbdPrev, cur = kbd.value;
+      let i = 0; while (i < prev.length && i < cur.length && prev[i] === cur[i]) i++;
+      const removed = prev.length - i, added = cur.slice(i);
+      for (let k = 0; k < removed; k++) this.key(this.isPhone() ? "del" : "backspace");
+      const parts = added.split("\n");
+      parts.forEach((part, idx) => { if (part) this.typeText(part); if (idx < parts.length - 1) this.key("enter"); });
+      this.kbdPrev = cur;
+      if (cur.length < 4 || cur.length > 200 || cur.includes("\n")) resetKbd();
+    });
+    kbd.addEventListener("keydown", (e) => {
+      const named = { ArrowUp: "up", ArrowDown: "down", ArrowLeft: "left", ArrowRight: "right", Escape: "escape", Tab: "tab" }[e.key];
+      if (named && !this.isPhone()) { e.preventDefault(); this.key(named); }
+      e.stopPropagation();
+    });
+
+    // ---- pointer: mouse, pen and touch ----
     const img = $("#screen");
     const norm = (e) => { const r = img.getBoundingClientRect(); return { x: Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)), y: Math.min(1, Math.max(0, (e.clientY - r.top) / r.height)) }; };
-    const ctrlOn = () => $("#dCtrl").checked;
+    const avg = () => { let x = 0, y = 0; for (const p of this.pts.values()) { x += p.x; y += p.y; } const n = this.pts.size || 1; return { x: x / n, y: y / n }; };
+    let moveQ = null, moveT = null;
+    const queueMove = (p) => { moveQ = p; if (moveT) return; moveT = setTimeout(() => { moveT = null; if (moveQ) { this.mouse({ action: "move", x: moveQ.x, y: moveQ.y }); moveQ = null; } }, 30); };
 
-    img.onmousedown = (e) => {
-      if (!ctrlOn()) return; e.preventDefault();
-      const p = norm(e); this._downAt = { ...p, t: Date.now() };
-      if (!this.isPhone()) rpc("input.mouse", { action: "down", button: btnName(e.button), x: p.x, y: p.y });
-    };
-    img.onmouseup = (e) => {
-      if (!ctrlOn() || !this._downAt) return; e.preventDefault();
-      const p = norm(e); const s = this._downAt; this._downAt = null;
-      if (this.isPhone()) {
-        const moved = Math.hypot(p.x - s.x, p.y - s.y);
-        if (moved < 0.03) rpc("input.mouse", { action: "tap", x: p.x, y: p.y });            // tap
-        else rpc("input.mouse", { action: "swipe", x: s.x, y: s.y, x2: p.x, y2: p.y, ms: Math.min(600, Math.max(120, Date.now() - s.t)) }); // swipe/drag
-      } else {
-        rpc("input.mouse", { action: "up", button: btnName(e.button), x: p.x, y: p.y });
-      }
-    };
-    img.onmousemove = (e) => { if (!ctrlOn() || this.isPhone()) return; const p = norm(e); this._moveQ = p; this.flushMove(); };
-    img.oncontextmenu = (e) => e.preventDefault();
-    img.ondblclick = (e) => { if (!ctrlOn()) return; const p = norm(e); rpc("input.mouse", { action: "dblclick", button: "left", x: p.x, y: p.y }); };
-    img.onwheel = (e) => { if (!ctrlOn()) return; e.preventDefault(); rpc("input.mouse", { action: "scroll", dy: Math.sign(e.deltaY) * 3 }); };
-    window.addEventListener("keydown", (e) => {
-      if (!this.running || !ctrlOn()) return;
-      const pg = $(".page[data-page=desktop]"); if (!pg.classList.contains("active")) return;
-      if (this.isPhone()) {
-        // phones: type printable characters, send named keys for the rest
-        if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); rpc("input.text", { text: e.key }); return; }
-        const named = { "Backspace": "del", "Enter": "enter", "Escape": "back", "Tab": "tab" }[e.key];
-        if (named) { e.preventDefault(); rpc("input.key", { key: named, action: "press" }); }
+    img.addEventListener("pointerdown", (e) => {
+      if (!this.ctrlOn()) return;
+      e.preventDefault(); try { img.setPointerCapture(e.pointerId); } catch (er) {}
+      this.pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      const p = norm(e);
+      if (e.pointerType === "touch") {
+        if (this.pts.size >= 2) {
+          clearTimeout(this.lpT);
+          if (this.touch && this.touch.mode === "drag" && !this.isPhone()) this.mouse({ action: "up", button: "left", x: p.x, y: p.y });
+          const a = avg(); this.touch = { mode: "scroll", x: a.x, y: a.y };
+          return;
+        }
+        this.touch = { mode: "tap", start: p, cx: e.clientX, cy: e.clientY, t: Date.now() };
+        clearTimeout(this.lpT);
+        this.lpT = setTimeout(() => {
+          if (!this.touch || this.touch.mode !== "tap") return;
+          this.touch.mode = "done";
+          const s = this.touch.start;
+          if (this.isPhone()) this.mouse({ action: "longpress", x: s.x, y: s.y });
+          else this.mouse({ action: "click", button: "right", x: s.x, y: s.y });
+          if (navigator.vibrate) try { navigator.vibrate(15); } catch (er) {}
+        }, 550);
         return;
       }
-      e.preventDefault();
-      const combo = keyCombo(e);
-      if (combo) rpc("input.key", { key: combo, action: "press" });
+      this._downAt = { x: p.x, y: p.y, t: Date.now() };
+      if (!this.isPhone()) this.mouse({ action: "down", button: btnName(e.button), x: p.x, y: p.y });
     });
+    img.addEventListener("pointermove", (e) => {
+      if (!this.ctrlOn()) return;
+      if (e.pointerType === "touch") {
+        if (!this.pts.has(e.pointerId) || !this.touch) return;
+        this.pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        const t = this.touch;
+        if (t.mode === "scroll") {
+          const a = avg(); const dy = a.y - t.y, dx = a.x - t.x;
+          if (Math.abs(dy) >= 24) { const c = norm({ clientX: a.x, clientY: a.y }); this.mouse({ action: "scroll", dy: dy > 0 ? -3 : 3, x: c.x, y: c.y }); t.y = a.y; }
+          if (Math.abs(dx) >= 40 && !this.isPhone()) { this.mouse({ action: "hscroll", dx: dx > 0 ? -3 : 3 }); t.x = a.x; }
+          return;
+        }
+        if (t.mode === "tap" && Math.hypot(e.clientX - t.cx, e.clientY - t.cy) > 10) {
+          clearTimeout(this.lpT); t.mode = "drag";
+          if (!this.isPhone()) this.mouse({ action: "down", button: "left", x: t.start.x, y: t.start.y });
+        }
+        if (t.mode === "drag" && !this.isPhone()) queueMove(norm(e));
+        return;
+      }
+      if (this.isPhone()) return;
+      queueMove(norm(e));
+    });
+    const endPointer = (e, cancelled) => {
+      if (!this.ctrlOn()) { this.pts.delete(e.pointerId); return; }
+      const p = norm(e);
+      if (e.pointerType === "touch") {
+        this.pts.delete(e.pointerId);
+        const t = this.touch; if (!t) return;
+        if (t.mode === "scroll") { if (this.pts.size === 0) this.touch = null; return; }
+        clearTimeout(this.lpT);
+        if (!cancelled) {
+          if (t.mode === "tap") this.mouse({ action: this.isPhone() ? "tap" : "click", button: "left", x: t.start.x, y: t.start.y });
+          else if (t.mode === "drag") {
+            if (this.isPhone()) this.mouse({ action: "swipe", x: t.start.x, y: t.start.y, x2: p.x, y2: p.y, ms: Math.min(600, Math.max(120, Date.now() - t.t)) });
+            else { if (moveT) { clearTimeout(moveT); moveT = null; } this.mouse({ action: "up", button: "left", x: p.x, y: p.y }); }
+          }
+        } else if (t.mode === "drag" && !this.isPhone()) this.mouse({ action: "up", button: "left", x: p.x, y: p.y });
+        this.touch = null;
+        return;
+      }
+      this.pts.delete(e.pointerId);
+      const s = this._downAt; if (!s) return; this._downAt = null;
+      if (this.isPhone()) {
+        if (cancelled) return;
+        const moved = Math.hypot(p.x - s.x, p.y - s.y);
+        if (moved < 0.03) this.mouse({ action: Date.now() - s.t > 550 ? "longpress" : "tap", x: p.x, y: p.y });
+        else this.mouse({ action: "swipe", x: s.x, y: s.y, x2: p.x, y2: p.y, ms: Math.min(600, Math.max(120, Date.now() - s.t)) });
+      } else {
+        if (moveT) { clearTimeout(moveT); moveT = null; }
+        this.mouse({ action: "up", button: btnName(e.button), x: p.x, y: p.y });
+      }
+    };
+    img.addEventListener("pointerup", (e) => endPointer(e, false));
+    img.addEventListener("pointercancel", (e) => endPointer(e, true));
+    img.addEventListener("contextmenu", (e) => e.preventDefault());
+    img.addEventListener("dragstart", (e) => e.preventDefault());
+    img.addEventListener("wheel", (e) => {
+      if (!this.ctrlOn()) return; e.preventDefault();
+      const p = norm(e);
+      if (e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)) { if (!this.isPhone()) this.mouse({ action: "hscroll", dx: Math.sign(e.deltaX || e.deltaY) * 3, x: p.x, y: p.y }); return; }
+      this.mouse({ action: "scroll", dy: Math.sign(e.deltaY) * 3, x: p.x, y: p.y });
+    }, { passive: false });
+
+    // ---- physical keyboard ----
+    window.addEventListener("keydown", (e) => {
+      if (!this.running || !this.ctrlOn() || e.isComposing) return;
+      const pg = $(".page[data-page=desktop]"); if (!pg.classList.contains("active")) return;
+      const tg = e.target; if (tg && tg !== document.body && tg !== img && /^(INPUT|TEXTAREA|SELECT)$/.test(tg.tagName)) return;
+      const altGr = e.getModifierState && e.getModifierState("AltGraph");
+      const printable = e.key.length === 1 && (altGr || !(e.ctrlKey || e.metaKey || e.altKey));
+      if (this.isPhone()) {
+        if (printable) { e.preventDefault(); this.typeText(e.key); return; }
+        const named = { Backspace: "del", Enter: "enter", Escape: "back", Tab: "tab", Home: "home" }[e.key];
+        if (named) { e.preventDefault(); this.key(named); }
+        return;
+      }
+      if (printable) { e.preventDefault(); this.typeText(e.key); return; }
+      const combo = keyCombo(e);
+      if (combo) { e.preventDefault(); this.key(combo); }
+    });
+    document.addEventListener("visibilitychange", () => { this.hash = ""; });
   },
-  flushMove() { if (this._moveT) return; this._moveT = setTimeout(() => { this._moveT = null; if (this._moveQ) { rpc("input.mouse", { action: "move", x: this._moveQ.x, y: this._moveQ.y }); this._moveQ = null; } }, 40); },
+  async loadMonitors() {
+    const sel = $("#dMon"); sel.hidden = true; sel.innerHTML = ""; this.mon = 0;
+    if (this.isPhone()) return;
+    let mons = [];
+    try { mons = await rpc("screen.monitors", {}) || []; } catch (e) { return; }
+    if (mons.length < 2) return;
+    mons.forEach((m, i) => { const o = document.createElement("option"); o.value = i; o.textContent = "Screen " + (i + 1) + (m.primary ? " (main)" : "") + " · " + m.w + "×" + m.h; sel.appendChild(o); });
+    const all = document.createElement("option"); all.value = -1; all.textContent = "All screens"; sel.appendChild(all);
+    sel.value = "0"; sel.hidden = false;
+  },
   async start() {
     const d = activeDev();
     if (!(d.caps || []).includes("screen")) { toast("This device can't share its screen", true); return; }
-    this.running = true; $("#screen").hidden = false; $("#screenOff").hidden = true; this.frames = 0; this.lastT = performance.now();
-    this.loop();
+    this.fillKeys();
+    $("#dKbd").hidden = false; $("#dPaste").hidden = false;
+    $("#screenWrap").classList.toggle("noctl", !this.ctrlOn());
+    if (this.running) return;
+    this.running = true; this.gen++; this.hash = "";
+    $("#screen").hidden = false; $("#screenOff").hidden = true;
+    this.frames = 0; this.same = 0; this.bytes = 0; this.lastT = performance.now();
+    $("#dFps").textContent = "connecting…";
+    await this.loadMonitors();
+    this.loop(this.gen);
   },
-  stop() { this.running = false; const s = $("#screen"); if (s) { s.hidden = true; } const off = $("#screenOff"); if (off) off.hidden = false; $("#dFps").textContent = ""; },
-  async loop() {
+  stop() {
+    this.running = false; this.gen++; this.hash = ""; this.touch = null; this.pts.clear();
+    const s = $("#screen"); if (s) { s.hidden = true; }
+    const off = $("#screenOff"); if (off) off.hidden = false;
+    const f = $("#dFps"); if (f) f.textContent = "";
+    document.body.classList.remove("desk-full");
+  },
+  async loop(gen) {
     let fails = 0;
-    while (this.running) {
+    const live = () => this.running && this.gen === gen;
+    while (live()) {
+      if (document.hidden) { await sleep(500); continue; }
+      const st = this.settings(); const t0 = performance.now();
       try {
-        const r = await rpc("screen.capture", { quality: +$("#dQual").value, maxWidth: +$("#dWidth").value });
-        if (!this.running) break;
-        $("#screen").src = "data:image/jpeg;base64," + r.data;
+        const r = await rpc("screen.capture", { quality: st.q, maxWidth: st.w, monitor: this.mon, since: this.hash });
+        if (!live()) break;
+        this.lat = Math.round(performance.now() - t0);
+        if (r.same) { this.same++; }
+        else {
+          const img = $("#screen"); img.src = "data:" + (r.mime || "image/jpeg") + ";base64," + r.data;
+          this.hash = r.hash || ""; this.frames++; this.bytes += r.data.length * 0.75;
+          this._dim = r.w + "×" + r.h;
+        }
         fails = 0;
-        this.frames++;
         const now = performance.now();
-        if (now - this.lastT > 1000) { $("#dFps").textContent = this.frames + " fps · " + r.w + "×" + r.h; this.frames = 0; this.lastT = now; }
+        if (now - this.lastT > 1000) {
+          const secs = (now - this.lastT) / 1000;
+          const fps = Math.round(this.frames / secs), kbs = Math.round(this.bytes / 1024 / secs);
+          $("#dFps").textContent = (this.frames === 0 && this.same > 0 ? "no changes" : fps + " fps") + " · " + kbs + " KB/s · " + this.lat + " ms" + (this._dim ? " · " + this._dim : "");
+          this.frames = 0; this.same = 0; this.bytes = 0; this.lastT = now;
+        }
       } catch (e) {
         fails++;
         // The phone may still be showing its "start capturing?" prompt — keep trying a while.
         if (/grant|not available|prompt|projection/i.test(e.message) && fails < 60) {
           $("#dFps").textContent = "waiting for screen permission on the device…";
-          await new Promise((r) => setTimeout(r, 1000));
-          continue;
+          await sleep(1000); continue;
         }
-        if (fails < 3) { await new Promise((r) => setTimeout(r, 500)); continue; }
+        if (/secure desktop|locked|BitBlt/i.test(e.message) && fails < 600) {
+          $("#dFps").textContent = "screen unavailable (locked or a UAC prompt) — retrying…";
+          await sleep(1000); continue;
+        }
+        if (fails < 3) { await sleep(500); continue; }
         toast(e.message, true); this.stop(); break;
       }
-      await new Promise((r) => setTimeout(r, 60));
+      const wait = 1000 / Math.max(1, st.fps) - (performance.now() - t0);
+      await sleep(Math.max(10, wait));
     }
   },
 };
+function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
 /* ---------- Notifications ---------- */
 const Notif = {
@@ -780,9 +1017,12 @@ function btnName(b) { return b === 2 ? "right" : b === 1 ? "middle" : "left"; }
 function keyCombo(e) {
   const mods = []; if (e.ctrlKey) mods.push("ctrl"); if (e.altKey) mods.push("alt"); if (e.shiftKey) mods.push("shift"); if (e.metaKey) mods.push("win");
   let k = e.key;
-  const map = { " ": "space", "ArrowUp": "up", "ArrowDown": "down", "ArrowLeft": "left", "ArrowRight": "right", "Escape": "escape", "Enter": "enter", "Backspace": "backspace", "Delete": "delete", "Tab": "tab", "Home": "home", "End": "end", "PageUp": "pageup", "PageDown": "pagedown" };
-  if (map[k]) k = map[k]; else if (k.length === 1) k = k.toLowerCase(); else if (/^F\d+$/.test(k)) k = k.toLowerCase(); else return null;
-  if (mods.length === 0 && (e.key.length === 1)) return null; // plain typing handled elsewhere? (we still send as key)
+  const map = { " ": "space", "+": "plus", "ArrowUp": "up", "ArrowDown": "down", "ArrowLeft": "left", "ArrowRight": "right", "Escape": "escape", "Enter": "enter", "Backspace": "backspace", "Delete": "delete", "Tab": "tab", "Home": "home", "End": "end", "PageUp": "pageup", "PageDown": "pagedown", "Insert": "insert", "CapsLock": "capslock", "PrintScreen": "printscreen", "ContextMenu": "apps", "Pause": "pause", "NumLock": "numlock", "ScrollLock": "scrolllock", "AudioVolumeUp": "volumeup", "AudioVolumeDown": "volumedown", "AudioVolumeMute": "volumemute", "MediaPlayPause": "mediaplaypause" };
+  if (map[k]) k = map[k]; else if (k.length === 1) {
+    k = k.toLowerCase();
+    // With Ctrl/Alt held, use the physical key so shortcuts work whatever the layout (e.g. Ctrl+Shift+1).
+    const m = /^(Key([A-Z])|Digit(\d))$/.exec(e.code || ""); if (m && mods.length) k = (m[2] || m[3]).toLowerCase();
+  } else if (/^F\d+$/.test(k)) k = k.toLowerCase(); else return null;
   if (["ctrl", "alt", "shift", "win"].includes(k)) return null;
   return mods.concat(k).join("+");
 }

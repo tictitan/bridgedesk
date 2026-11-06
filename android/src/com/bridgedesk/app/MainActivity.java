@@ -288,6 +288,7 @@ public class MainActivity extends Activity {
     // ---------- downloads (PC -> phone) ----------
     /** Fetch the file over the pinned TLS connection and save it to Downloads/BridgeDesk. */
     private void downloadToPhone(final String url, final String contentDisposition, final String mime) {
+        if (url.startsWith("data:")) { saveDataUrl(url); return; } // e.g. Desktop → screenshot button
         final String name = fileNameFor(url, contentDisposition, mime);
         toast("Downloading " + name + "…");
         new Thread(() -> {
@@ -315,6 +316,24 @@ public class MainActivity extends Activity {
                 if (c != null) c.disconnect();
             }
         }, "bd-download").start();
+    }
+
+    private void saveDataUrl(final String url) {
+        new Thread(() -> {
+            try {
+                int comma = url.indexOf(',');
+                String meta = url.substring(5, comma);
+                byte[] bytes = meta.endsWith(";base64")
+                        ? android.util.Base64.decode(url.substring(comma + 1), android.util.Base64.DEFAULT)
+                        : Uri.decode(url.substring(comma + 1)).getBytes("UTF-8");
+                String ext = meta.startsWith("image/png") ? ".png" : meta.startsWith("image/") ? ".jpg" : ".bin";
+                String name = "BridgeDesk-" + new java.text.SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(new java.util.Date()) + ext;
+                final String where = saveToDownloads(name, new java.io.ByteArrayInputStream(bytes));
+                runOnUiThread(() -> Toast.makeText(this, "Saved to " + where, Toast.LENGTH_LONG).show());
+            } catch (Exception e) {
+                runOnUiThread(() -> Toast.makeText(this, "Save failed: " + e.getMessage(), Toast.LENGTH_LONG).show());
+            }
+        }, "bd-save").start();
     }
 
     private String fileNameFor(String url, String cd, String mime) {

@@ -135,19 +135,21 @@ func mcpTools() []map[string]any {
 			"description": "Capture the current screen of a device and return it as an image.",
 			"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
 				"device": dev, "maxWidth": map[string]any{"type": "integer", "description": "Downscale to this width (default 1280)."},
+				"monitor": map[string]any{"type": "integer", "description": "Display to capture on multi-monitor PCs: 0 = primary (default), 1.. = others, -1 = all displays."},
 			}},
 		},
 		{
 			"name":        "bridge_input",
-			"description": "Send mouse or keyboard input to a device for remote control. kind='move'|'click'|'dblclick'|'scroll' use x,y in 0..1 screen fractions; kind='key' sends a key or combo like 'ctrl+alt+delete'; kind='type' types text.",
+			"description": "Send mouse or keyboard input to a device for remote control. kind='move'|'click'|'dblclick'|'scroll' use x,y in 0..1 fractions of the captured screen (pass the same 'monitor' you screenshotted); kind='key' sends a key or combo like 'ctrl+shift+escape' or 'win+r'; kind='type' types text (newlines press Enter).",
 			"inputSchema": map[string]any{"type": "object", "required": []string{"kind"}, "properties": map[string]any{
 				"device": dev,
 				"kind":   map[string]any{"type": "string", "enum": []string{"move", "click", "dblclick", "scroll", "key", "type"}},
 				"x":      map[string]any{"type": "number"}, "y": map[string]any{"type": "number"},
-				"button": map[string]any{"type": "string", "enum": []string{"left", "right", "middle"}},
-				"dy":     map[string]any{"type": "integer", "description": "Scroll amount for kind=scroll."},
-				"key":    map[string]any{"type": "string", "description": "Key or combo for kind=key."},
-				"text":   map[string]any{"type": "string", "description": "Text for kind=type."},
+				"button":  map[string]any{"type": "string", "enum": []string{"left", "right", "middle"}},
+				"dy":      map[string]any{"type": "integer", "description": "Scroll amount for kind=scroll."},
+				"key":     map[string]any{"type": "string", "description": "Key or combo for kind=key."},
+				"text":    map[string]any{"type": "string", "description": "Text for kind=type."},
+				"monitor": map[string]any{"type": "integer", "description": "Display the x,y refer to (0 = primary, -1 = all)."},
 			}},
 		},
 		{
@@ -296,12 +298,18 @@ func (s *Server) mcpCallTool(ctx context.Context, req mcpReq) any {
 			W    int    `json:"w"`
 			H    int    `json:"h"`
 		}
-		if err := s.hub.Call(ctx, dev, "screen.capture", map[string]any{"maxWidth": mw, "quality": 70}, &cap); err != nil {
+		mon := intArg(args, "monitor")
+		if err := s.hub.Call(ctx, dev, "screen.capture", map[string]any{"maxWidth": mw, "quality": 70, "monitor": mon}, &cap); err != nil {
 			return fail(err)
+		}
+		note := fmt.Sprintf("screen %dx%d (monitor %d)", cap.W, cap.H, mon)
+		var mons []Monitor
+		if err := s.hub.Call(ctx, dev, "screen.monitors", nil, &mons); err == nil && len(mons) > 1 {
+			note += fmt.Sprintf("; this device has %d displays — pass monitor=0..%d or -1 for all", len(mons), len(mons)-1)
 		}
 		return mcpResult(req.ID, map[string]any{"content": []map[string]any{
 			{"type": "image", "data": cap.Data, "mimeType": "image/jpeg"},
-			{"type": "text", "text": fmt.Sprintf("screen %dx%d", cap.W, cap.H)},
+			{"type": "text", "text": note},
 		}})
 
 	case "bridge_input":
@@ -324,6 +332,7 @@ func (s *Server) mcpCallTool(ctx context.Context, req mcpReq) any {
 			}
 			err := s.hub.Call(ctx, dev, "input.mouse", map[string]any{
 				"action": kind, "x": args["x"], "y": args["y"], "button": btn, "dy": intArg(args, "dy"),
+				"monitor": intArg(args, "monitor"),
 			}, nil)
 			if err != nil {
 				return fail(err)
