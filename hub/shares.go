@@ -114,22 +114,31 @@ func shareList(ctx context.Context) ([]ShareInfo, error) {
 // mountAs is a drive letter (Windows, e.g. "Z:") or a directory (Linux/macOS).
 func shareMount(ctx context.Context, source, mountAs, user, pass string) (map[string]any, error) {
 	source = strings.TrimSpace(source)
-	if source == "" || mountAs == "" {
-		return nil, fmt.Errorf("source and mount target are required")
+	if source == "" {
+		return nil, fmt.Errorf("a share path is required")
 	}
+	auto := mountAs == "" || strings.EqualFold(mountAs, "auto")
 	isNFS := nfsRe.MatchString(source) && !strings.HasPrefix(source, `\\`) && !strings.HasPrefix(source, "//")
 	switch runtime.GOOS {
 	case "windows":
 		unc := strings.ReplaceAll(source, "/", `\`)
 		if isNFS {
-			out, err := shareExec(ctx, "cmd.exe", "/c", "mount", "-o", "anon", source, mountAs)
+			tgt := mountAs
+			if auto {
+				tgt = "*"
+			}
+			out, err := shareExec(ctx, "cmd.exe", "/c", "mount", "-o", "anon", source, tgt)
 			if err != nil {
 				return nil, fmt.Errorf("NFS mount failed (is the “Client for NFS” Windows feature installed?): %s", strings.TrimSpace(out))
 			}
-			return map[string]any{"mounted": mountAs, "source": source}, nil
+			return map[string]any{"mounted": firstDriveLetter(out, tgt), "source": source}, nil
 		}
-		// net use Z: \\server\share [password] [/user:user] /persistent:yes
-		args := []string{"use", mountAs, unc}
+		// net use {Z:|*} \\server\share [password] [/user:user] /persistent:yes
+		tgt := mountAs
+		if auto {
+			tgt = "*" // let Windows pick the next free drive letter
+		}
+		args := []string{"use", tgt, unc}
 		if pass != "" {
 			args = append(args, pass)
 		}
@@ -141,8 +150,12 @@ func shareMount(ctx context.Context, source, mountAs, user, pass string) (map[st
 		if err != nil {
 			return nil, fmt.Errorf("%s", strings.TrimSpace(out))
 		}
-		return map[string]any{"mounted": mountAs, "source": unc}, nil
+		return map[string]any{"mounted": firstDriveLetter(out, tgt), "source": unc}, nil
 	case "linux":
+		if auto {
+			home, _ := os.UserHomeDir()
+			mountAs = fmt.Sprintf("%s/BridgeDesk/%s", home, shareBaseName(source))
+		}
 		os.MkdirAll(mountAs, 0o755)
 		var out string
 		var err error
@@ -161,6 +174,10 @@ func shareMount(ctx context.Context, source, mountAs, user, pass string) (map[st
 		}
 		return map[string]any{"mounted": mountAs, "source": source}, nil
 	case "darwin":
+		if auto {
+			home, _ := os.UserHomeDir()
+			mountAs = fmt.Sprintf("%s/BridgeDesk/%s", home, shareBaseName(source))
+		}
 		os.MkdirAll(mountAs, 0o755)
 		if isNFS {
 			out, err := shareExec(ctx, "mount", "-t", "nfs", source, mountAs)
@@ -201,5 +218,31 @@ func shareUnmount(ctx context.Context, mountAs string) (map[string]any, error) {
 }
 
 var nfsRe = regexp.MustCompile(`^[^\\/]+:/`)
+var driveRe = regexp.MustCompile(`(?i)([A-Z]):`)
 
 func psEscape(s string) string { return strings.ReplaceAll(s, "'", "''") }
+
+// firstDriveLetter extracts the assigned drive from `net use *` output ("Drive Z: is now connected").
+func firstDriveLetter(out, fallback string) string {
+	if m := driveRe.FindString(out); m != "" {
+		return strings.ToUpper(m)
+	}
+	if fallback == "*" {
+		return "(auto)"
+	}
+	return fallback
+}
+
+func shareBaseName(source string) string {
+	s := strings.TrimRight(strings.ReplaceAll(source, `\`, "/"), "/")
+	if i := strings.LastIndex(s, "/"); i >= 0 {
+		s = s[i+1:]
+	}
+	if i := strings.LastIndex(s, ":"); i >= 0 {
+		s = s[i+1:]
+	}
+	if s == "" {
+		s = "share"
+	}
+	return s
+}

@@ -588,6 +588,9 @@ const Shares = {
     return `<div class="card">
       <h3>Shared storage (SMB / NFS)</h3>
       <p class="hint">Share a folder from this PC so other machines in the fleet can mount it as a network drive, or mount a share from elsewhere. Creating/mounting usually needs administrator rights.</p>
+      <div class="row" style="justify-content:space-between"><b style="font-size:13px">Shares on your fleet</b><button id="shScan" class="icon" title="Rescan">⟳ Detect</button></div>
+      <div id="shFleet"><div class="hint" style="padding:2px 0">Scanning…</div></div>
+      <hr style="border:none;border-top:1px solid var(--border);margin:12px 0">
       <div class="row"><b style="font-size:13px">Share a folder</b></div>
       <div class="row">
         <input type="text" id="shPath" placeholder="folder path e.g. C:\\Shared" style="flex:2;min-width:160px">
@@ -608,6 +611,8 @@ const Shares = {
   },
   bind() {
     const C = $("#shCreate"); if (!C) return;
+    $("#shScan").onclick = () => this.detect();
+    this.detect();
     C.onclick = async () => {
       const path = $("#shPath").value.trim(), name = $("#shName").value.trim();
       if (!path || !name) { $("#shMsg").textContent = "Enter a folder and a share name."; return; }
@@ -627,6 +632,32 @@ const Shares = {
       } catch (e) { $("#shMsg").textContent = "⚠ " + e.message; }
     };
     this.list();
+  },
+  async detect() {
+    const host = $("#shFleet"); if (!host) return;
+    host.innerHTML = '<div class="hint" style="padding:2px 0">Scanning the fleet…</div>';
+    let data;
+    try { data = await (await api("/api/fleet-shares")).json(); } catch (e) { host.innerHTML = `<div class="hint">${esc(e.message)}</div>`; return; }
+    // only show shares offered by OTHER machines (mounting your own share locally is pointless)
+    const shares = (data.shares || []).filter(s => s.deviceId !== data.self);
+    if (!shares.length) { host.innerHTML = '<div class="hint" style="padding:2px 0">No shares detected on other machines. Share a folder below (on a Windows machine) and it\'ll appear here on the others.</div>'; return; }
+    host.innerHTML = "";
+    for (const s of shares) {
+      const row = document.createElement("div"); row.className = "row"; row.style.cssText = "justify-content:space-between;border-bottom:1px solid var(--border);padding:7px 0";
+      row.innerHTML = `<div style="min-width:0">
+        <div><span class="mono" style="color:var(--accent)">${esc(s.unc || s.name)}</span></div>
+        <div class="hint">on ${esc(s.device)} · ${esc(s.path || s.name)}</div></div>`;
+      const btn = document.createElement("button"); btn.className = "primary"; btn.textContent = "Mount here";
+      btn.onclick = async () => {
+        btn.disabled = true; btn.textContent = "Mounting…";
+        try { const r = await rpc("share.mount", { source: s.unc, mountAs: "auto" }, "local");
+          $("#shMsg").innerHTML = `✓ Mounted <span class="mono">${esc(s.unc)}</span> at <span class="mono">${esc(r.mounted || "")}</span> on this PC`;
+          btn.textContent = "Mounted ✓";
+        } catch (e) { $("#shMsg").textContent = "⚠ " + e.message; btn.disabled = false; btn.textContent = "Mount here"; }
+      };
+      row.appendChild(btn);
+      host.appendChild(row);
+    }
   },
   async list() {
     const host = $("#shList"); if (!host) return;

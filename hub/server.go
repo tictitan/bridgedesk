@@ -166,6 +166,7 @@ func (s *Server) routes() {
 	m.HandleFunc("/api/settings", s.auth(s.handleSettings))
 	m.HandleFunc("/api/notifications", s.auth(s.handleNotifications))
 	m.HandleFunc("/api/links", s.auth(s.handleLinks))
+	m.HandleFunc("/api/fleet-shares", s.auth(s.handleFleetShares))
 	m.HandleFunc("/ws", s.auth(s.handleWS)) // dashboard event/RPC stream
 
 	// Agents (phones / other PCs) link here.
@@ -342,6 +343,52 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleNotifications(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"notifications": s.notif.recent()})
+}
+
+// handleFleetShares auto-discovers SMB shares offered by every online device in the fleet,
+// so the dashboard can show them with one-click mount.
+func (s *Server) handleFleetShares(w http.ResponseWriter, r *http.Request) {
+	type row struct {
+		DeviceID string `json:"deviceId"`
+		Device   string `json:"device"`
+		Kind     string `json:"kind"`
+		Name     string `json:"name"`
+		Path     string `json:"path"`
+		UNC      string `json:"unc"`
+	}
+	self := s.hub.local.Info().ID
+	var mu sync.Mutex
+	var rows []row
+	var wg sync.WaitGroup
+	for _, d := range s.hub.List() {
+		if !d.Online {
+			continue
+		}
+		d := d
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			dev, err := s.hub.Get(d.ID)
+			if err != nil {
+				return
+			}
+			ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
+			raw, err := dev.Call(ctx, "share.list", nil)
+			cancel()
+			if err != nil {
+				return
+			}
+			var shares []ShareInfo
+			json.Unmarshal(raw, &shares)
+			mu.Lock()
+			for _, sh := range shares {
+				rows = append(rows, row{d.ID, d.Name, d.Kind, sh.Name, sh.Path, sh.UNC})
+			}
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
+	writeJSON(w, 200, map[string]any{"shares": rows, "self": self})
 }
 
 // handleLinks manages the fleet of hubs this one meshes with.
