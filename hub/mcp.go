@@ -202,6 +202,26 @@ func mcpTools() []map[string]any {
 				"dismiss": map[string]any{"type": "boolean", "description": "If true, dismiss the notification."},
 			}},
 		},
+		{
+			"name":        "bridge_notification_history",
+			"description": "Search the hub's saved history of phone notifications from every linked phone (kept even after they were dismissed). Filter by text, app, or only those containing a one-time code.",
+			"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
+				"query":   map[string]any{"type": "string", "description": "Text to search in app, title and body."},
+				"app":     map[string]any{"type": "string", "description": "App name or package, e.g. 'WhatsApp' or 'com.google.android.apps.messaging'."},
+				"codes":   map[string]any{"type": "boolean", "description": "Only notifications with a detected verification code."},
+				"limit":   map[string]any{"type": "integer", "description": "Max results (default 30)."},
+				"minutes": map[string]any{"type": "integer", "description": "Only the last N minutes."},
+			}},
+		},
+		{
+			"name":        "bridge_latest_code",
+			"description": "Get the most recent one-time / 2FA verification code that arrived on a linked phone (SMS, email or app notification). Use right after triggering a login that sends a code.",
+			"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
+				"app":     map[string]any{"type": "string", "description": "Optional app/sender filter, e.g. 'Messages' or 'Google'."},
+				"minutes": map[string]any{"type": "integer", "description": "How far back to look (default 10)."},
+				"wait":    map[string]any{"type": "integer", "description": "Seconds to wait for a new code to arrive if none is found yet (max 120)."},
+			}},
+		},
 	}
 }
 
@@ -387,6 +407,48 @@ func (s *Server) mcpCallTool(ctx context.Context, req mcpReq) any {
 			return fail(err)
 		}
 		return textResult(string(out.Notifications))
+
+	case "bridge_notification_history":
+		limit := intArg(args, "limit")
+		if limit <= 0 {
+			limit = 30
+		}
+		f := NotifQuery{Q: str("query"), App: str("app"), Limit: limit}
+		if c, _ := args["codes"].(bool); c {
+			f.CodesOnly = true
+		}
+		if m := intArg(args, "minutes"); m > 0 {
+			f.SinceMs = time.Now().Add(-time.Duration(m) * time.Minute).UnixMilli()
+		}
+		return jsonResult(s.notif.Query(s.cfg, f))
+
+	case "bridge_latest_code":
+		mins := intArg(args, "minutes")
+		if mins <= 0 {
+			mins = 10
+		}
+		wait := intArg(args, "wait")
+		if wait > 120 {
+			wait = 120
+		}
+		deadline := time.Now().Add(time.Duration(wait) * time.Second)
+		for {
+			f := NotifQuery{App: str("app"), CodesOnly: true, Limit: 1,
+				SinceMs: time.Now().Add(-time.Duration(mins) * time.Minute).UnixMilli()}
+			if list := s.notif.Query(s.cfg, f); len(list) > 0 {
+				n := list[0]
+				return jsonResult(map[string]any{"code": n.Code, "app": n.App, "title": n.Title, "text": n.Text,
+					"device": n.Device, "ageSeconds": (time.Now().UnixMilli() - n.Received) / 1000})
+			}
+			if time.Now().After(deadline) {
+				return textResult(fmt.Sprintf("no verification code in the last %d minutes", mins))
+			}
+			select {
+			case <-ctx.Done():
+				return fail(ctx.Err())
+			case <-time.After(time.Second):
+			}
+		}
 
 	case "bridge_notification_action":
 		if dismiss, _ := args["dismiss"].(bool); dismiss {

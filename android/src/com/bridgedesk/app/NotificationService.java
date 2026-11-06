@@ -30,7 +30,19 @@ public class NotificationService extends NotificationListenerService {
     @Override public void onNotificationPosted(StatusBarNotification sbn) {
         AgentService a = AgentService.instance;
         if (a == null || !a.store().allowNotifications()) return;
+        if (isNoise(sbn, this)) return;
         try { a.emit("notif.posted", toJson(sbn, this)); } catch (Exception ignored) {}
+    }
+
+    /** Skip what nobody wants on their PC: our own service notice, group summaries, silent ongoing ones (music, USB...). */
+    static boolean isNoise(StatusBarNotification sbn, Context ctx) {
+        if (ctx.getPackageName().equals(sbn.getPackageName())) return true;
+        Notification n = sbn.getNotification();
+        if ((n.flags & Notification.FLAG_GROUP_SUMMARY) != 0) return true;
+        boolean ongoing = (n.flags & Notification.FLAG_ONGOING_EVENT) != 0;
+        if (ongoing && !Notification.CATEGORY_CALL.equals(n.category)) return true;
+        Bundle ex = n.extras;
+        return ex == null || (str(ex, Notification.EXTRA_TITLE).isEmpty() && str(ex, Notification.EXTRA_TEXT).isEmpty());
     }
 
     @Override public void onNotificationRemoved(StatusBarNotification sbn) {
@@ -125,10 +137,11 @@ public class NotificationService extends NotificationListenerService {
         o.put("pkg", sbn.getPackageName());
         o.put("app", appLabel(ctx, sbn.getPackageName()));
         o.put("time", sbn.getPostTime());
-        o.put("title", str(ex, Notification.EXTRA_TITLE));
-        String text = str(ex, Notification.EXTRA_TEXT);
-        if (text.isEmpty()) text = str(ex, Notification.EXTRA_BIG_TEXT);
-        o.put("text", text);
+        String title = str(ex, Notification.EXTRA_TITLE_BIG);
+        if (title.isEmpty()) title = str(ex, Notification.EXTRA_TITLE);
+        o.put("title", title);
+        o.put("text", fullText(ex));
+        o.put("category", n.category == null ? "" : n.category);
         o.put("sub", str(ex, Notification.EXTRA_SUB_TEXT));
         o.put("clearable", sbn.isClearable());
         o.put("ongoing", (n.flags & Notification.FLAG_ONGOING_EVENT) != 0);
@@ -143,6 +156,37 @@ public class NotificationService extends NotificationListenerService {
         o.put("actions", acts);
         o.put("canOpen", n.contentIntent != null);
         return o;
+    }
+
+    /** The most complete text: expanded text, inbox lines, or the recent messages of a chat. */
+    static String fullText(Bundle ex) {
+        String text = str(ex, Notification.EXTRA_TEXT);
+        String big = str(ex, Notification.EXTRA_BIG_TEXT);
+        if (big.length() > text.length()) text = big;
+        try {
+            android.os.Parcelable[] msgs = ex.getParcelableArray(Notification.EXTRA_MESSAGES);
+            if (msgs != null && msgs.length > 1) {
+                StringBuilder sb = new StringBuilder();
+                for (int i = Math.max(0, msgs.length - 5); i < msgs.length; i++) {
+                    if (!(msgs[i] instanceof Bundle)) continue;
+                    Bundle m = (Bundle) msgs[i];
+                    CharSequence who = m.getCharSequence("sender");
+                    CharSequence body = m.getCharSequence("text");
+                    if (body == null) continue;
+                    if (sb.length() > 0) sb.append('\n');
+                    if (who != null && who.length() > 0) sb.append(who).append(": ");
+                    sb.append(body);
+                }
+                if (sb.length() > text.length()) text = sb.toString();
+            }
+            CharSequence[] lines = ex.getCharSequenceArray(Notification.EXTRA_TEXT_LINES);
+            if (lines != null && lines.length > 0) {
+                StringBuilder sb = new StringBuilder();
+                for (CharSequence l : lines) { if (l == null) continue; if (sb.length() > 0) sb.append('\n'); sb.append(l); }
+                if (sb.length() > text.length()) text = sb.toString();
+            }
+        } catch (Exception ignored) {}
+        return text;
     }
 
     private static String str(Bundle b, String key) {

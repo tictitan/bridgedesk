@@ -341,8 +341,55 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"path": dest, "size": offset})
 }
 
+// handleNotifications serves the persistent history (GET, filterable) and manages it (POST).
+//
+//	GET  /api/notifications?q=&app=&codes=1&unread=1&limit=100
+//	POST /api/notifications {"op":"read","key":""} | {"op":"clear"} | {"op":"mute"|"unmute","app":"WhatsApp"}
 func (s *Server) handleNotifications(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, 200, map[string]any{"notifications": s.notif.recent()})
+	if r.Method == "POST" {
+		var in struct {
+			Op  string `json:"op"`
+			Key string `json:"key"`
+			App string `json:"app"`
+		}
+		json.NewDecoder(r.Body).Decode(&in)
+		switch in.Op {
+		case "read":
+			s.notif.MarkRead(in.Key)
+		case "clear":
+			s.notif.Clear()
+		case "mute", "unmute":
+			app := strings.TrimSpace(in.App)
+			if app == "" {
+				http.Error(w, "app required", 400)
+				return
+			}
+			var keep []string
+			for _, m := range s.cfg.MutedApps {
+				if !strings.EqualFold(m, app) {
+					keep = append(keep, m)
+				}
+			}
+			if in.Op == "mute" {
+				keep = append(keep, app)
+			}
+			s.cfg.MutedApps = keep
+			s.cfg.Save()
+		default:
+			http.Error(w, "unknown op", 400)
+			return
+		}
+		writeJSON(w, 200, map[string]any{"ok": true, "summary": s.notif.Summary(s.cfg)})
+		return
+	}
+	q := r.URL.Query()
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	if limit <= 0 {
+		limit = 200
+	}
+	list := s.notif.Query(s.cfg, NotifQuery{Q: q.Get("q"), App: q.Get("app"), CodesOnly: q.Get("codes") == "1",
+		Unread: q.Get("unread") == "1", Limit: limit})
+	writeJSON(w, 200, map[string]any{"notifications": list, "summary": s.notif.Summary(s.cfg)})
 }
 
 // handleFleetShares auto-discovers SMB shares offered by every online device in the fleet,
@@ -476,6 +523,7 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		"name": s.cfg.Name, "lanPort": s.cfg.LANPort, "listenLan": s.cfg.ListenLAN,
 		"discovery": s.cfg.Discovery, "allowShell": s.cfg.AllowShell, "allowScreen": s.cfg.AllowScreen,
 		"allowFiles": s.cfg.AllowFiles, "allowMcp": s.cfg.AllowMCP, "mirrorNotif": s.cfg.MirrorNotif, "inboxDir": s.cfg.InboxDir,
+		"autoCopyCodes": s.cfg.AutoCopyCodes, "notifWebhook": s.cfg.NotifWebhook, "mutedApps": s.cfg.MutedApps,
 		"fingerprint": s.fp, "autostart": autostartEnabled(), "accessKey": s.cfg.AccessKey,
 		"addresses": ips, "primaryHost": host,
 		"elevated": isElevated(), "os": s.hub.local.Info().Kind,
@@ -496,6 +544,13 @@ func applySettings(c *Config, in map[string]any) {
 	b("allowFiles", &c.AllowFiles)
 	b("allowMcp", &c.AllowMCP)
 	b("mirrorNotif", &c.MirrorNotif)
+	b("autoCopyCodes", &c.AutoCopyCodes)
+	if v, ok := in["notifWebhook"].(string); ok {
+		v = strings.TrimSpace(v)
+		if v == "" || strings.HasPrefix(v, "https://") || strings.HasPrefix(v, "http://") {
+			c.NotifWebhook = v
+		}
+	}
 	if v, ok := in["name"].(string); ok && v != "" {
 		c.Name = v
 	}
@@ -562,6 +617,10 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 			u()
 		}
 	}()
+	// Every dashboard gets fleet-wide notification pushes (badge, browser alerts, live list).
+	subs = append(subs, s.notif.Listen(func(event string, n Notification) {
+		send(map[string]any{"event": event, "params": n})
+	}))
 
 	for {
 		var msg struct {

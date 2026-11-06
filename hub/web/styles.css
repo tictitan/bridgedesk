@@ -22,7 +22,7 @@ button.primary { background: var(--accent2); border-color: var(--accent); }
 button.primary:hover { background: var(--accent); }
 button.danger:hover { border-color: var(--err); color: var(--err); }
 button.icon { padding: 7px 9px; }
-input[type=text], input[type=password], input[type=number], select {
+input[type=text], input[type=password], input[type=number], input[type=search], input[type=url], select {
   background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
   padding: 7px 10px; outline: none;
 }
@@ -190,3 +190,26 @@ h2.ph { margin: 0 0 12px; font-size: 18px; }
   #nav { flex-basis: 54px; }
   .kv { grid-template-columns: 1fr; }
 }
+
+/* notifications v2 */
+#nav .tab { position: relative; }
+#nav .tab .badge { position: absolute; top: 6px; right: 10px; min-width: 17px; height: 17px; padding: 0 4px; border-radius: 9px;
+  background: var(--err, #e5534b); color: #fff; font-size: 10.5px; font-weight: 700; line-height: 17px; text-align: center; }
+#nav .tab .badge[hidden] { display: none; }
+#nSearch { min-width: 160px; flex: 0 1 240px; }
+#nSearch[hidden], #nApp[hidden], #nClear[hidden], .nsettings[hidden] { display: none !important; }
+.nsettings { display: flex; flex-direction: column; gap: 9px; padding: 12px 16px; background: var(--panel); border-bottom: 1px solid var(--border); font-size: 13.5px; }
+.nsettings label { display: flex; gap: 8px; align-items: center; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip-btn { border-radius: 14px; padding: 3px 10px; font-size: 12.5px; }
+.notif { position: relative; }
+.notif.unread { border-left: 3px solid var(--accent); }
+.notif.gone { opacity: .72; }
+.notif.muted { opacity: .55; }
+.notif-meta { color: var(--muted); font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.notif-gone { font-style: italic; }
+.notif-code { display: flex; align-items: center; gap: 10px; margin-top: 9px; }
+.notif-code .code { font: 700 22px/1 ui-monospace, SFMono-Regular, Consolas, monospace; letter-spacing: 3px; padding: 6px 12px;
+  border-radius: 8px; background: var(--panel2); border: 1px dashed var(--accent); color: var(--fg); user-select: all; }
+.notif-mini { background: transparent; border: 1px solid var(--border); border-radius: 14px; padding: 3px 9px; font-size: 12px; opacity: .75; }
+.notif-mini:hover { opacity: 1; }

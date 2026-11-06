@@ -602,115 +602,245 @@ function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
 /* ---------- Notifications ---------- */
 const Notif = {
-  items: [], subbed: null,
+  items: [], view: "live", unread: 0, apps: {}, muted: [], refreshT: null, pollT: null,
+  phones() { return App.devices.filter((d) => d.kind === "android" && d.online); },
   bind() {
     $("#nRefresh").onclick = () => this.load();
-    $("#nMirror").onchange = async (e) => {
-      try { await api("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mirrorNotif: e.target.checked }) }); toast(e.target.checked ? "PC toasts on" : "PC toasts off"); }
+    $("#nView").onchange = (e) => { this.view = e.target.value; this.syncFilters(); this.load(); };
+    $("#nApp").onchange = () => this.load();
+    let qt = null; $("#nSearch").oninput = () => { clearTimeout(qt); qt = setTimeout(() => this.load(), 250); };
+    $("#nReadAll").onclick = async () => { await this.op({ op: "read" }); this.load(); };
+    $("#nClear").onclick = async () => { if (!confirm("Clear the saved notification history? (Notifications still on the phone stay.)")) return; await this.op({ op: "clear" }); this.load(); };
+    $("#nSetBtn").onclick = () => { $("#nSettings").hidden = !$("#nSettings").hidden; if (!$("#nSettings").hidden) this.loadSettings(); };
+    const setFlag = (id, key, on, off) => $(id).onchange = async (e) => {
+      try { await api("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ [key]: e.target.checked }) }); toast(e.target.checked ? on : off); }
       catch (err) { toast(err.message, true); }
     };
+    setFlag("#nMirror", "mirrorNotif", "Pop-ups on this PC on", "Pop-ups on this PC off");
+    setFlag("#nCodes", "autoCopyCodes", "Codes will be copied to this PC's clipboard", "Auto-copy codes off");
+    $("#nBrowser").checked = this.browserOn();
+    $("#nBrowser").onchange = async (e) => {
+      if (e.target.checked && "Notification" in window && Notification.permission !== "granted") {
+        try { await Notification.requestPermission(); } catch (er) {}
+      }
+      const ok = e.target.checked && "Notification" in window && Notification.permission === "granted";
+      if (e.target.checked && !ok) toast("This browser blocked notifications", true);
+      e.target.checked = ok; try { localStorage.setItem("bd.notifBrowser", ok ? "1" : ""); } catch (er) {}
+    };
+    $("#nHookSave").onclick = async () => {
+      const v = $("#nHook").value.trim();
+      if (v && !/^https?:\/\//i.test(v)) { toast("Webhook must start with https://", true); return; }
+      try { await api("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ notifWebhook: v }) }); toast(v ? "Forwarding to webhook" : "Webhook off"); }
+      catch (err) { toast(err.message, true); }
+    };
+    // fleet-wide pushes from the hub (every dashboard gets them)
+    App.subs.set("hub.notif", (m) => this.onPush(m));
+    this.refreshBadge();
+  },
+  browserOn() { try { return localStorage.getItem("bd.notifBrowser") === "1" && "Notification" in window && Notification.permission === "granted"; } catch (e) { return false; } },
+  async op(body) {
+    try {
+      const r = await (await api("/api/notifications", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })).json();
+      if (r.summary) this.applySummary(r.summary);
+      return r;
+    } catch (e) { toast(e.message, true); }
+  },
+  applySummary(s) {
+    this.unread = s.unread || 0; this.apps = s.apps || {}; this.muted = s.muted || [];
+    const tab = document.querySelector('#nav .tab[data-go="notif"]');
+    if (tab) {
+      let b = tab.querySelector(".badge");
+      if (!b) { b = document.createElement("span"); b.className = "badge"; tab.appendChild(b); }
+      b.textContent = this.unread > 99 ? "99+" : String(this.unread); b.hidden = this.unread === 0;
+    }
+  },
+  async refreshBadge() { try { const r = await (await api("/api/notifications?limit=1")).json(); this.applySummary(r.summary || {}); } catch (e) {} },
+  onAlertsPage() { const p = $(".page[data-page=notif]"); return p && p.classList.contains("active"); },
+  onPush(m) {
+    const n = m.params || {};
+    if (m.event === "notif.posted") {
+      if (!n.muted) {
+        if (this.onAlertsPage() && !document.hidden) this.op({ op: "read", key: n.key });
+        else { this.unread++; this.applySummary({ unread: this.unread, apps: this.apps, muted: this.muted }); }
+        this.browserAlert(n);
+      }
+    }
+    if (this.onAlertsPage()) { clearTimeout(this.refreshT); this.refreshT = setTimeout(() => this.load(true), 400); }
+  },
+  browserAlert(n) {
+    if (!this.browserOn() || (!document.hidden && this.onAlertsPage())) return;
+    try {
+      const title = n.code ? `Code ${n.code} · ${n.app}` : (n.title ? `${n.app}: ${n.title}` : n.app);
+      const nt = new Notification(title, { body: n.code ? "Click to copy the code" : (n.text || ""), tag: n.key, silent: false });
+      nt.onclick = () => {
+        window.focus(); nt.close();
+        if (n.code && navigator.clipboard) navigator.clipboard.writeText(n.code).then(() => toast("Code copied")).catch(() => {});
+        go("notif");
+      };
+    } catch (e) {}
+  },
+  async loadSettings() {
+    try {
+      const s = await (await api("/api/settings")).json();
+      $("#nMirror").checked = !!s.mirrorNotif; $("#nCodes").checked = !!s.autoCopyCodes; $("#nHook").value = s.notifWebhook || "";
+      this.muted = s.mutedApps || [];
+    } catch (e) {}
+    this.renderMuted();
+  },
+  renderMuted() {
+    const host = $("#nMuted");
+    if (!this.muted.length) { host.innerHTML = '<span class="hint">No muted apps. Use 🔕 on a notification to mute its app.</span>'; return; }
+    host.innerHTML = "";
+    for (const a of this.muted) {
+      const c = document.createElement("button"); c.className = "chip-btn"; c.title = "Unmute"; c.textContent = a + "  ✕";
+      c.onclick = async () => { await this.op({ op: "unmute", app: a }); this.renderMuted(); this.load(true); };
+      host.appendChild(c);
+    }
+  },
+  syncFilters() {
+    const hist = this.view !== "live";
+    $("#nSearch").hidden = !hist; $("#nApp").hidden = !hist; $("#nClear").hidden = !hist;
+    $("#nView").value = this.view;
+  },
+  fillApps() {
+    const sel = $("#nApp"); const cur = sel.value;
+    const names = Object.keys(this.apps).filter(Boolean).sort((a, b) => (this.apps[b] - this.apps[a]) || a.localeCompare(b));
+    sel.innerHTML = '<option value="">All apps</option>' + names.map((a) => `<option value="${esc(a)}">${esc(a)} (${this.apps[a]})</option>`).join("");
+    sel.value = names.includes(cur) ? cur : "";
   },
   async enter() {
-    // reflect the PC-toast setting
-    try { const s = await (await api("/api/settings")).json(); $("#nMirror").checked = !!s.mirrorNotif; } catch (e) {}
-    this.subscribeLive();
-    this.load();
+    if (App.devices.length && !this.phones().length && this.view === "live") this.view = "history";
+    this.syncFilters();
+    this.loadSettings();
+    await this.load();
+    this.op({ op: "read" });
+    clearInterval(this.pollT);
+    this.pollT = setInterval(() => { if (this.onAlertsPage() && !document.hidden && this.view === "live") this.load(true); else if (!this.onAlertsPage()) clearInterval(this.pollT); }, 20000);
   },
-  isPhone() { const d = activeDev(); return (d.caps || []).includes("notifications") || d.kind === "android"; },
-  subscribeLive() {
-    if (this.subbed) { unsubscribe("notif"); this.subbed = null; }
-    if (!this.isPhone()) return;
-    subscribe("notif", (m) => {
-      if (m.event === "notif.posted") { const n = m.params; this.items = this.items.filter(x => x.key !== n.key); this.items.unshift(n); this.render(); }
-      else if (m.event === "notif.removed") { this.items = this.items.filter(x => x.key !== m.params.key); this.render(); }
-    });
-    this.subbed = App.device;
-  },
-  async load() {
+  async load(quiet) {
     const host = $("#notifList");
-    if (!this.isPhone()) {
-      // show cross-device history the hub kept
-      try { const r = await (await api("/api/notifications")).json(); this.items = r.notifications || []; } catch (e) { this.items = []; }
-      $("#nHint").textContent = "Select your phone as the active device to control its notifications live.";
-      this.render();
+    if (this.view === "live") {
+      const phones = this.phones();
+      if (!phones.length) {
+        $("#nHint").textContent = "";
+        host.innerHTML = `<div class="card"><p>No phone is connected right now.</p><p class="hint">Switch to <b>History</b> to see what arrived earlier, or on the phone: BridgeDesk → <b>Phone access</b> → <b>Share this phone</b> + <b>Mirror notifications</b>.</p></div>`;
+        return;
+      }
+      $("#nHint").textContent = phones.map((p) => p.name).join(", ");
+      if (!quiet) host.innerHTML = '<div class="hint">loading…</div>';
+      const all = []; const errs = [];
+      await Promise.all(phones.map(async (p) => {
+        try { const r = await rpc("notif.list", {}, p.id); (r.notifications || []).forEach((n) => { n.deviceId = p.id; n.device = p.name; n.active = true; all.push(n); }); }
+        catch (e) { errs.push(p.name + ": " + e.message); }
+      }));
+      // enrich with hub-side info (detected codes, muted)
+      let hist = [];
+      try { const r = await (await api("/api/notifications?limit=300")).json(); hist = r.notifications || []; this.applySummary(r.summary || {}); } catch (e) {}
+      const byKey = new Map(hist.map((h) => [h.deviceId + "|" + h.key, h]));
+      all.forEach((n) => { const h = byKey.get(n.deviceId + "|" + n.key); if (h) { n.code = h.code; n.muted = h.muted; } });
+      all.sort((a, b) => (b.time || 0) - (a.time || 0));
+      this.items = all.filter((n) => !n.muted);
+      this.errs = errs;
+      this.render(phones.length > 1);
       return;
     }
-    $("#nHint").textContent = activeDev().name;
-    host.innerHTML = '<div class="hint">loading…</div>';
+    const q = new URLSearchParams({ limit: "300" });
+    if ($("#nSearch").value.trim()) q.set("q", $("#nSearch").value.trim());
+    if ($("#nApp").value) q.set("app", $("#nApp").value);
+    if (this.view === "codes") q.set("codes", "1");
     try {
-      const r = await rpc("notif.list");
-      this.items = r.notifications || [];
-      this.render();
-    } catch (e) {
-      host.innerHTML = `<div class="card"><p class="hint">${esc(e.message)}</p>
-        <p class="hint">On the phone: BridgeDesk → <b>Phone access</b> → <b>Mirror notifications to PC</b> → enable in Android settings.</p></div>`;
-    }
+      const r = await (await api("/api/notifications?" + q)).json();
+      this.items = r.notifications || []; this.applySummary(r.summary || {}); this.fillApps();
+    } catch (e) { this.items = []; }
+    this.errs = [];
+    const devs = new Set(this.items.map((n) => n.deviceId));
+    $("#nHint").textContent = this.items.length + (this.items.length === 1 ? " notification" : " notifications");
+    this.render(devs.size > 1);
   },
-  render() {
+  render(showDevice) {
     const host = $("#notifList");
+    host.innerHTML = "";
+    for (const e of this.errs || []) { const d = document.createElement("div"); d.className = "card"; d.innerHTML = `<p class="hint">${esc(e)}</p><p class="hint">On the phone: BridgeDesk → <b>Phone access</b> → <b>Mirror notifications to PC</b>.</p>`; host.appendChild(d); }
     if (!this.items.length) {
-      host.innerHTML = `<div class="notif-empty">
+      const msg = this.view === "codes" ? "No verification codes yet." : this.view === "history" ? "No saved notifications match." : "You're all caught up.";
+      host.insertAdjacentHTML("beforeend", `<div class="notif-empty">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 9a6 6 0 0112 0c0 5 2 6 2 6H4s2-1 2-6z" stroke-linejoin="round"/><path d="M10 19a2 2 0 004 0"/></svg>
-        <div>You're all caught up.</div>
-        <div class="hint">Notifications from your phone show up here.</div></div>`;
+        <div>${msg}</div><div class="hint">Notifications from your phones show up here.</div></div>`);
       return;
     }
-    host.innerHTML = "";
+    const catIcon = { msg: "💬", call: "📞", email: "✉", alarm: "⏰", event: "📅", reminder: "⏰", social: "👥", transport: "🚗", navigation: "🧭" };
     for (const n of this.items) {
-      const card = document.createElement("div"); card.className = "notif";
+      const card = document.createElement("div");
+      card.className = "notif" + (n.read === false ? " unread" : "") + (n.active === false ? " gone" : "") + (n.muted ? " muted" : "");
       const app = n.app || n.pkg || "App";
-      const color = avatarColor(app);
       const initial = (app.trim()[0] || "?").toUpperCase();
-      const actions = (n.actions || []).map(a => (typeof a === "string") ? { title: a, reply: false } : a);
+      const live = n.active !== false;
+      const actions = live ? (n.actions || []).map((a) => (typeof a === "string") ? { title: a, reply: false } : a) : [];
       let acts = "";
       actions.forEach((a, i) => {
-        const primary = /approve|yes|allow|confirm|it'?s me/i.test(a.title);
-        acts += `<button class="notif-act ${primary ? "primary" : ""} ${a.reply ? "is-reply" : ""}" data-k="${esc(n.key)}" data-a="${i}" data-reply="${a.reply ? 1 : 0}">${a.reply ? "↩ " : ""}${esc(a.title)}</button>`;
+        const primary = /approve|yes|allow|confirm|it'?s me|answer|accept/i.test(a.title);
+        acts += `<button class="notif-act ${primary ? "primary" : ""}" data-a="${i}" data-reply="${a.reply ? 1 : 0}">${a.reply ? "↩ " : ""}${esc(a.title)}</button>`;
       });
-      const openable = n.canOpen !== false;
+      const openable = live && n.canOpen !== false;
+      const meta = [showDevice && n.device ? "📱 " + esc(n.device) : "", catIcon[n.category] || "", live ? "" : '<span class="notif-gone">dismissed</span>'].filter(Boolean).join(" · ");
       card.innerHTML = `
-        <div class="notif-av" style="background:${color}">${esc(initial)}</div>
+        <div class="notif-av" style="background:${avatarColor(app)}">${esc(initial)}</div>
         <div class="notif-main">
-          <div class="notif-head"><span class="notif-app">${esc(app)}</span><span class="notif-time">${relTime(n.time)}</span></div>
-          <div class="notif-body ${openable ? "openable" : ""}" ${openable ? `data-open="${esc(n.key)}" title="Open on phone"` : ""}>
+          <div class="notif-head"><span class="notif-app">${esc(app)}</span>${meta ? `<span class="notif-meta">${meta}</span>` : ""}<span class="notif-time" title="${n.time ? esc(new Date(n.time).toLocaleString()) : ""}">${relTime(n.time)}</span></div>
+          <div class="notif-body ${openable ? "openable" : ""}" ${openable ? 'title="Open on phone"' : ""}>
             ${n.title ? `<div class="notif-title">${esc(n.title)}</div>` : ""}
             ${n.text ? `<div class="notif-text">${esc(n.text)}</div>` : ""}
           </div>
-          ${acts ? `<div class="notif-actions">${acts}</div>` : ""}
+          ${n.code ? `<div class="notif-code"><span class="code">${esc(n.code)}</span><button class="notif-act primary n-copycode">Copy code</button></div>` : ""}
+          <div class="notif-actions">${acts}
+            <button class="notif-mini n-copy" title="Copy text">⧉</button>
+            <button class="notif-mini n-mute" title="${n.muted ? "Unmute" : "Mute"} ${esc(app)}">${n.muted ? "🔔" : "🔕"}</button>
+          </div>
           <div class="notif-reply" hidden><input type="text" class="notif-reply-in" placeholder="Type a reply…"><button class="notif-act primary notif-reply-send">Send</button><button class="notif-act notif-reply-cancel">Cancel</button></div>
         </div>
-        <button class="notif-dismiss" data-dismiss="${esc(n.key)}" title="Dismiss">✕</button>`;
+        ${live ? '<button class="notif-dismiss" title="Dismiss on phone">✕</button>' : ""}`;
 
-      // tap body to open the app on the phone
-      const body = card.querySelector("[data-open]");
-      if (body) body.onclick = async () => { try { await rpc("notif.open", { key: body.dataset.open }); toast("Opened on phone"); } catch (e) { toast(e.message, true); } };
-
+      const dev = n.deviceId;
+      const body = card.querySelector(".notif-body.openable");
+      if (body) body.onclick = async () => { try { await rpc("notif.open", { key: n.key }, dev); toast("Opened on phone"); } catch (e) { toast(e.message, true); } };
+      const cc = card.querySelector(".n-copycode");
+      if (cc) cc.onclick = () => copyText(n.code, "Code copied");
+      card.querySelector(".n-copy").onclick = () => copyText([n.title, n.text].filter(Boolean).join("\n"), "Copied");
+      card.querySelector(".n-mute").onclick = async () => {
+        const target = n.app || n.pkg;
+        await this.op({ op: n.muted ? "unmute" : "mute", app: target });
+        toast(n.muted ? target + " unmuted" : target + " muted — no more pop-ups from it");
+        this.renderMuted(); this.load(true);
+      };
       const replyBox = card.querySelector(".notif-reply");
       const replyIn = card.querySelector(".notif-reply-in");
-      card.querySelectorAll("button[data-a]").forEach(b => b.onclick = async () => {
-        if (b.dataset.reply === "1") {
-          // show the inline reply field, remember which action to fire
-          replyBox.hidden = false; replyIn.focus(); replyBox.dataset.k = b.dataset.k; replyBox.dataset.a = b.dataset.a;
-          return;
-        }
-        try { await rpc("notif.action", { key: b.dataset.k, action: +b.dataset.a }); toast("Sent: " + b.textContent.trim()); }
+      card.querySelectorAll("button[data-a]").forEach((b) => b.onclick = async () => {
+        if (b.dataset.reply === "1") { replyBox.hidden = false; replyIn.focus(); replyBox.dataset.a = b.dataset.a; return; }
+        try { await rpc("notif.action", { key: n.key, action: +b.dataset.a }, dev); toast("Sent: " + b.textContent.trim()); }
         catch (e) { toast(e.message, true); }
       });
       const sendReply = async () => {
         const text = replyIn.value.trim(); if (!text) return;
-        try { await rpc("notif.reply", { key: replyBox.dataset.k, action: +replyBox.dataset.a, text }); toast("Reply sent"); replyIn.value = ""; replyBox.hidden = true; }
+        try { await rpc("notif.reply", { key: n.key, action: +replyBox.dataset.a, text }, dev); toast("Reply sent"); replyIn.value = ""; replyBox.hidden = true; }
         catch (e) { toast(e.message, true); }
       };
       card.querySelector(".notif-reply-send").onclick = sendReply;
       card.querySelector(".notif-reply-cancel").onclick = () => { replyBox.hidden = true; replyIn.value = ""; };
       replyIn.onkeydown = (e) => { if (e.key === "Enter") sendReply(); };
-
-      const dz = card.querySelector("button[data-dismiss]");
-      dz.onclick = async () => { try { await rpc("notif.dismiss", { key: dz.dataset.dismiss }); this.items = this.items.filter(x => x.key !== dz.dataset.dismiss); this.render(); } catch (e) { toast(e.message, true); } };
+      const dz = card.querySelector(".notif-dismiss");
+      if (dz) dz.onclick = async () => {
+        try { await rpc("notif.dismiss", { key: n.key }, dev); this.items = this.items.filter((x) => !(x.key === n.key && x.deviceId === dev)); this.render(showDevice); }
+        catch (e) { toast(e.message, true); }
+      };
       host.appendChild(card);
     }
   },
 };
+function copyText(t, msg) {
+  const done = () => toast(msg || "Copied");
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(t).then(done).catch(() => prompt("Copy:", t));
+  else prompt("Copy:", t);
+}
 
 /* ---------- Clipboard ---------- */
 function bindClipboard() {

@@ -114,9 +114,28 @@
     <!-- Notifications -->
     <div class="page" data-page="notif">
       <div class="toolbar">
-        <button id="nRefresh" class="icon" title="Refresh">⟳</button>
+        <button id="nRefresh" class="icon" title="Refresh">&#10227;</button>
+        <select id="nView" title="What to show">
+          <option value="live">On my phones now</option>
+          <option value="history">History</option>
+          <option value="codes">Verification codes</option>
+        </select>
+        <input id="nSearch" type="search" placeholder="Search…" hidden>
+        <select id="nApp" title="Filter by app" hidden></select>
         <span class="grow hint" id="nHint"></span>
-        <label class="hint"><input type="checkbox" id="nMirror"> toast on this PC</label>
+        <button id="nReadAll" title="Mark everything as read">&#10003; Read all</button>
+        <button id="nClear" class="danger" title="Clear saved history" hidden>Clear</button>
+        <button id="nSetBtn" class="icon" title="Notification settings">&#9881;</button>
+      </div>
+      <div id="nSettings" class="nsettings" hidden>
+        <label><input type="checkbox" id="nMirror"> Pop-ups on this PC for phone notifications</label>
+        <label><input type="checkbox" id="nCodes"> Auto-copy verification codes (2FA / SMS) to this PC's clipboard</label>
+        <label><input type="checkbox" id="nBrowser"> Pop-ups in this browser (works on Mac/Linux and when the dashboard is in the background)</label>
+        <div class="row"><span class="hint" style="min-width:120px">Forward to webhook</span>
+          <input type="url" id="nHook" placeholder="https://hooks.slack.com/… or https://discord.com/api/webhooks/…" style="flex:1;min-width:200px">
+          <button id="nHookSave">Save</button></div>
+        <div class="hint">Every non-muted notification is POSTed as JSON (Slack, Discord, Teams, Home Assistant, n8n…). Messages containing a verification code are never forwarded.</div>
+        <div class="row" style="align-items:flex-start"><span class="hint" style="min-width:120px">Muted apps</span><div id="nMuted" class="chips"></div></div>
       </div>
       <div class="pad" style="flex:1"><div id="notifList"></div></div>
     </div>

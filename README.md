@@ -143,11 +143,19 @@ The **Desktop** tab streams the screen and sends your mouse, touch and keyboard 
 
 ### Notifications & app prompts (e.g. Okta)
 
-Once *Mirror notifications* is on, the PC dashboard's **Alerts** tab shows the phone's live notifications — texts, chat messages, SMS 2FA codes, and push prompts such as **Okta Verify** or Microsoft Authenticator. Each notification shows its action buttons, so you can tap **"Yes, it's me" / "Approve"** straight from the PC, or dismiss it — without picking up the phone. Turn on **Settings → Mirror phone notifications** (or the "toast on this PC" checkbox in Alerts) to also get a native Windows pop-up for each one.
+Once *Mirror notifications* is on, the PC dashboard's **Alerts** tab shows notifications from **all your linked phones** — texts, chats, emails, calls, SMS 2FA codes, and push prompts such as **Okta Verify** or Microsoft Authenticator:
 
-Claude can do this too, through MCP: *"check my phone for an Okta prompt and approve it"* uses `bridge_notifications` + `bridge_notification_action`.
+- **Act from the PC** — tap the notification's buttons (**Approve**, **Answer**, **Mark as read**…), reply inline to WhatsApp/SMS/Messenger, open it on the phone, or dismiss it.
+- **Verification codes** — one-time codes are detected automatically and shown big with a **Copy code** button. Turn on *Auto-copy verification codes* and the code lands in the PC's clipboard the moment the SMS arrives — just paste.
+- **History & search** — everything is saved on the hub (survives restarts, last 500), searchable by text, filterable by app, with a *Verification codes* view. Chats show the last few messages, not just the latest line.
+- **Unread badge** on the Alerts tab, live across every open dashboard.
+- **Pop-ups** — native Windows/macOS/Linux pop-ups, and/or browser pop-ups (handy on a Mac or when the dashboard is in the background).
+- **Mute noisy apps** with 🔕 — no pop-ups, no forwarding, hidden from the live view. Silent ongoing notices (music players, USB, BridgeDesk itself) are skipped on the phone.
+- **Forward to a webhook** — Slack, Discord, Teams, Home Assistant, n8n… Notifications containing a verification code are never forwarded.
 
-> **Privacy note:** notification mirroring can include one-time codes and login prompts, so it's gated behind your access key, the pinned certificate, and an on-phone toggle — and it only runs while you've enabled it. Keep it to networks you trust.
+Claude can do this too, through MCP: *"check my phone for an Okta prompt and approve it"* uses `bridge_notifications` + `bridge_notification_action`; *"log me in, the code was texted to me"* uses `bridge_latest_code` (it can wait for the SMS to arrive); `bridge_notification_history` searches past notifications.
+
+> **Privacy note:** notification mirroring can include one-time codes and login prompts, so it's gated behind your access key, the pinned certificate, and an on-phone toggle — and it only runs while you've enabled it. History is stored only on your PC (`notifications.json` in the BridgeDesk config folder). Keep it to networks you trust.
 
 ### About "control the phone while it's locked"
 
@@ -169,7 +177,7 @@ Claude can do this too, through MCP: *"check my phone for an Okta prompt and app
 
 The hub exposes a Model Context Protocol server at **`http://127.0.0.1:47811/mcp`** with these tools:
 
-`bridge_list_devices`, `bridge_run`, `bridge_list_files`, `bridge_read_file`, `bridge_write_file`, `bridge_transfer` (copy a file *between* devices), `bridge_screenshot`, `bridge_input`, `bridge_clipboard`, `bridge_notifications` (read a phone's notifications), `bridge_notification_action` (tap/approve/dismiss one).
+`bridge_list_devices`, `bridge_run`, `bridge_list_files`, `bridge_read_file`, `bridge_write_file`, `bridge_transfer` (copy a file *between* devices), `bridge_screenshot`, `bridge_input`, `bridge_clipboard`, `bridge_notifications` (read a phone's notifications), `bridge_notification_action` (tap/approve/reply/dismiss one), `bridge_notification_history` (search saved notifications), `bridge_latest_code` (get the newest 2FA code).
 
 So you can ask Claude things like *"screenshot my phone"*, *"pull the newest file from my phone's Download folder onto my PC Desktop"*, or *"run `Get-Process` on my PC and summarize the top memory users."*
 

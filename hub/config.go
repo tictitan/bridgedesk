@@ -35,22 +35,25 @@ type LinkTarget struct {
 }
 
 type Config struct {
-	Name        string       `json:"name"`
-	AccessKey   string       `json:"accessKey"`
-	LANPort     int          `json:"lanPort"`
-	LocalPort   int          `json:"localPort"`
-	ListenLAN   bool         `json:"listenLan"`
-	Discovery   bool         `json:"discovery"`
-	AllowShell  bool         `json:"allowShell"`
-	AllowScreen bool         `json:"allowScreen"`
-	AllowFiles  bool         `json:"allowFiles"`
-	AllowMCP    bool         `json:"allowMcp"`
-	MirrorNotif bool         `json:"mirrorNotif"` // raise a desktop toast when a linked phone notification arrives
-	ShareUser   string       `json:"shareUser"`   // dedicated local account used for seamless SMB shares
-	SharePass   string       `json:"sharePass"`   // its password (so the fleet can auto-mount without a prompt)
-	InboxDir    string       `json:"inboxDir"`    // where files shared from phones land
-	Links       []LinkTarget `json:"links"`       // other hubs THIS machine dials out to (we become a device there)
-	Peers       []LinkTarget `json:"peers"`       // other PCs this console controls (they dial back to us)
+	Name          string       `json:"name"`
+	AccessKey     string       `json:"accessKey"`
+	LANPort       int          `json:"lanPort"`
+	LocalPort     int          `json:"localPort"`
+	ListenLAN     bool         `json:"listenLan"`
+	Discovery     bool         `json:"discovery"`
+	AllowShell    bool         `json:"allowShell"`
+	AllowScreen   bool         `json:"allowScreen"`
+	AllowFiles    bool         `json:"allowFiles"`
+	AllowMCP      bool         `json:"allowMcp"`
+	MirrorNotif   bool         `json:"mirrorNotif"`   // raise a desktop toast when a linked phone notification arrives
+	AutoCopyCodes bool         `json:"autoCopyCodes"` // copy one-time codes from phone notifications to this PC's clipboard
+	MutedApps     []string     `json:"mutedApps"`     // apps (package or name) that never toast/forward
+	NotifWebhook  string       `json:"notifWebhook"`  // POST each (non-code) notification here: Slack/Discord/Teams/any JSON
+	ShareUser     string       `json:"shareUser"`     // dedicated local account used for seamless SMB shares
+	SharePass     string       `json:"sharePass"`     // its password (so the fleet can auto-mount without a prompt)
+	InboxDir      string       `json:"inboxDir"`      // where files shared from phones land
+	Links         []LinkTarget `json:"links"`         // other hubs THIS machine dials out to (we become a device there)
+	Peers         []LinkTarget `json:"peers"`         // other PCs this console controls (they dial back to us)
 
 	mu   sync.Mutex
 	path string
