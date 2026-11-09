@@ -148,13 +148,35 @@ Notes: ID tokens last ~1 h and the phone refreshes silently via the stored refre
 dashboard WebView gets a short-lived `aria_gid` cookie after a verified load. The MCP port (47811)
 stays loopback-only and is unaffected.
 
-## Possible next phase — multi-account email (Gmail, Outlook, …)
+## Multi-account email (Gmail + Outlook)
 
-Let Aria read and help with several mail accounts from the phone. Email lives in the Aria desktop
-app today and the phone relay can't reach it, so the clean path is a **self-contained email module
-in the hub** exposed to the relay as its own MCP: Gmail via the Google OAuth above (add the Gmail
-scope), Outlook/Microsoft 365 via Microsoft Graph OAuth, each account added independently. Reads
-free, sending gated by *Allow changes* — same safety model. Not built yet.
+Aria can read and help with several mailboxes from the phone — **no phone changes needed**: the
+hub exposes `email_*` tools on its MCP, so the relay's Claude gets them automatically and you just
+ask in chat ("any unread from the bank?", "reply to Sam that I'll call tomorrow"). Each mailbox is
+a Gmail or Outlook/Microsoft-365 account you enrol **on the PC**; the hub keeps only a refresh
+token and mints short-lived access tokens per call. See `hub/email.go`.
+
+Tools: `email_accounts`, `email_list` (optional provider search — Gmail syntax like `is:unread
+from:bob`, or Outlook keywords), `email_read`, `email_send`. Reading is free; **`email_send` is a
+change** — gated by *Allow changes* and Aria shows you the recipient/subject/body first.
+
+**Enrol a mailbox (on the PC):**
+
+```bash
+bridgedesk email add-gmail   <your-oauth-client-id> [client-secret]   # opens Google in your browser
+bridgedesk email add-outlook <your-oauth-client-id> [client-secret]   # opens Microsoft sign-in
+bridgedesk email list                                                 # show connected mailboxes
+bridgedesk email remove you@gmail.com
+```
+
+- **Gmail:** reuse the same Google OAuth client as Aria desktop (it already grants
+  `gmail.modify` + `gmail.send`). Enable the Gmail API for that client if you haven't.
+- **Outlook/Microsoft 365:** an Azure app registration (public client) with delegated
+  `Mail.Read`, `Mail.Send`, `offline_access`, and `http://127.0.0.1` as a redirect URI.
+
+Add as many accounts as you like; when more than one is set up, tell Aria which (`account=`) or
+she'll ask. End-to-end verification needs a mailbox enrolled and the new hub running; the offline
+tests cover the MCP wiring and the ID-token/relay logic.
 
 ## Other possible work
 

@@ -45,6 +45,9 @@ var aiReadTools = []string{
 	"mcp__bridgedesk__bridge_notification_history",
 	"mcp__bridgedesk__bridge_latest_code",
 	"mcp__bridgedesk__bridge_shares",
+	"mcp__bridgedesk__email_accounts",
+	"mcp__bridgedesk__email_list",
+	"mcp__bridgedesk__email_read",
 }
 
 // Fleet tools that change a device — only offered when the phone allows changes.
@@ -58,6 +61,7 @@ var aiChangeTools = []string{
 	"mcp__bridgedesk__bridge_share_create",
 	"mcp__bridgedesk__bridge_share_mount",
 	"mcp__bridgedesk__bridge_notification_action",
+	"mcp__bridgedesk__email_send",
 }
 
 // Built-in Claude Code tools the phone assistant must NEVER use. The CLI otherwise
@@ -83,6 +87,11 @@ Working across the fleet:
   summary with the device name as a heading, then note what you could do next.
 - When told to operate on one device, target it by name/id in every bridge_* call and leave the
   others alone.
+
+Email: the user may have several mailboxes (Gmail, Outlook). Use email_accounts to see them,
+email_list/email_read to go through mail (free), and email_send to send (a change — draft it, show
+the user the recipient/subject/body, and only send after they approve). Name the account when more
+than one exists.
 
 Safety:
 - Reading is free (list devices/files, read a file, screenshot, notifications, 2FA codes).

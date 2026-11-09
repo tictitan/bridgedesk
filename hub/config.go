@@ -63,6 +63,9 @@ type Config struct {
 	GoogleEmails  []string `json:"googleEmails"`  // allowed verified emails (lower-cased on check)
 	GoogleClients []string `json:"googleClients"` // optional accepted `aud` client IDs; empty = any Google client
 
+	// Mailboxes Aria can read/help with from the phone (Gmail + Outlook/Microsoft 365).
+	EmailAccounts []EmailAccount `json:"emailAccounts"`
+
 	mu   sync.Mutex
 	path string
 }
