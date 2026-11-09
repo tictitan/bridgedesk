@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"math/big"
+	"net/http"
 	"testing"
 	"time"
 )
@@ -117,6 +118,23 @@ func TestGoogleGateAllowlist(t *testing.T) {
 	}
 	if _, err := s.googleGate(mk("me@gmail.com", "someone-else")); err == nil {
 		t.Error("non-matching aud should fail when a client allowlist is set")
+	}
+}
+
+func TestLoopbackExemptFromGoogleGate(t *testing.T) {
+	// The gate must apply to LAN requests but never to the owner's own loopback path.
+	mk := func(remote string) *http.Request {
+		r, _ := http.NewRequest("GET", "/api/devices", nil)
+		r.RemoteAddr = remote
+		return r
+	}
+	if isLoopbackReq(mk("203.0.113.9:5000")) {
+		t.Error("public IP should not be loopback")
+	}
+	for _, lo := range []string{"127.0.0.1:5000", "[::1]:5000"} {
+		if !isLoopbackReq(mk(lo)) {
+			t.Errorf("%s should be loopback", lo)
+		}
 	}
 }
 

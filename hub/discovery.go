@@ -86,7 +86,11 @@ func (s *Server) dialPeerOnce(link LinkTarget) (isSelf bool) {
 			},
 		},
 	}
-	conn, _, err := dialer.Dial(wsURL, nil)
+	var hdr http.Header
+	if tok := s.hubGoogleIDToken(); tok != "" {
+		hdr = http.Header{"X-Aria-Google": {tok}}
+	}
+	conn, _, err := dialer.Dial(wsURL, hdr)
 	if err != nil {
 		return false
 	}
@@ -139,6 +143,9 @@ func (s *Server) instructPeer(peerHost string, peerPort int, peerKey, peerFp str
 	req, _ := http.NewRequest("POST", url, strings.NewReader(string(body)))
 	req.Header.Set("Authorization", "Bearer "+peerKey)
 	req.Header.Set("Content-Type", "application/json")
+	if tok := s.hubGoogleIDToken(); tok != "" {
+		req.Header.Set("X-Aria-Google", tok)
+	}
 	resp, err := pinnedClient(peerFp).Do(req)
 	if err != nil {
 		return err

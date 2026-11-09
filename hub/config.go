@@ -66,6 +66,13 @@ type Config struct {
 	// Mailboxes Aria can read/help with from the phone (Gmail + Outlook/Microsoft 365).
 	EmailAccounts []EmailAccount `json:"emailAccounts"`
 
+	// This hub's own Google identity, used to authenticate to PEER hubs: when RequireGoogle is
+	// on, outbound /link and /api/links dials carry a fresh ID token minted from this refresh
+	// token, so the receiving hub admits this one only for an allowed Google account.
+	HubGoogleClientID string `json:"hubGoogleClientId"`
+	HubGoogleSecret   string `json:"hubGoogleSecret,omitempty"`
+	HubGoogleRefresh  string `json:"hubGoogleRefresh,omitempty"`
+
 	mu   sync.Mutex
 	path string
 }

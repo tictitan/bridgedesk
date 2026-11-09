@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -70,6 +71,59 @@ func (s *Server) emailAccountList() []map[string]string {
 		out = append(out, map[string]string{"email": a.Email, "provider": a.Provider})
 	}
 	return out
+}
+
+// ---- this hub's Google identity (for authenticating to peer hubs) ----
+
+var hubGoogleTok struct {
+	mu  sync.Mutex
+	tok string
+	exp time.Time
+}
+
+// hubGoogleIDToken mints (and caches) a fresh ID token for this hub's Google identity, to attach
+// to outbound peer dials. Returns "" when no hub identity is enrolled.
+func (s *Server) hubGoogleIDToken() string {
+	if s.cfg.HubGoogleRefresh == "" {
+		return ""
+	}
+	hubGoogleTok.mu.Lock()
+	defer hubGoogleTok.mu.Unlock()
+	if hubGoogleTok.tok != "" && time.Until(hubGoogleTok.exp) > 5*time.Minute {
+		return hubGoogleTok.tok
+	}
+	form := url.Values{
+		"grant_type":    {"refresh_token"},
+		"refresh_token": {s.cfg.HubGoogleRefresh},
+		"client_id":     {s.cfg.HubGoogleClientID},
+	}
+	if s.cfg.HubGoogleSecret != "" {
+		form.Set("client_secret", s.cfg.HubGoogleSecret)
+	}
+	var out struct {
+		IDToken   string `json:"id_token"`
+		ExpiresIn int    `json:"expires_in"`
+	}
+	if postForm(googleTokenURL, form, &out) != nil || out.IDToken == "" {
+		return ""
+	}
+	ttl := out.ExpiresIn
+	if ttl < 300 {
+		ttl = 300
+	}
+	hubGoogleTok.tok = out.IDToken
+	hubGoogleTok.exp = time.Now().Add(time.Duration(ttl) * time.Second)
+	return out.IDToken
+}
+
+// enrollHubGoogle runs the loopback+PKCE flow with openid+email scope and returns the identity.
+func enrollHubGoogle(clientID, clientSecret string) (email, refresh string, err error) {
+	acc, err := enroll("google", clientID, clientSecret, googleAuthURL, googleTokenURL,
+		"openid email", "&access_type=offline&prompt=consent")
+	if err != nil {
+		return "", "", err
+	}
+	return acc.Email, acc.RefreshToken, nil
 }
 
 // ---- OAuth: refresh -> access token ----
