@@ -50,6 +50,19 @@ public class MainActivity extends Activity {
     private ValueCallback<Uri[]> pendingChooser;
     private static final int REQ_FILE_CHOOSER = 41;
 
+    // ---- Aria chat ----
+    private AiClient ai;
+    private LinearLayout chatLog;
+    private ScrollView chatScroll;
+    private EditText chatInput;
+    private Button sendBtn;
+    private TextView ariaBubble;          // the assistant bubble currently being filled
+    private boolean allowChanges = false;
+    private boolean busy = false;
+    private View ariaView, fleetView;
+    private Button tabAria, tabFleet;
+    private boolean fleetLoaded = false;
+
     @Override protected void onCreate(Bundle b) {
         super.onCreate(b);
         store = new Store(this);
@@ -94,8 +107,8 @@ public class MainActivity extends Activity {
         setup = col();
         setup.setPadding(dp(22), dp(40), dp(22), dp(22));
 
-        setup.addView(title("BridgeDesk"));
-        setup.addView(hint("Connect to the BridgeDesk hub running on your PC. On the PC, open BridgeDesk and read the access key and one of the LAN addresses."));
+        setup.addView(title("Aria"));
+        setup.addView(hint("Your assistant on the phone, powered by the Aria/BridgeDesk hub on your PC. On the PC, open BridgeDesk and read the access key and one of the LAN addresses — or scan the dashboard QR."));
 
         final EditText host = field("PC address or IP (e.g. 192.168.1.20)", InputType.TYPE_CLASS_TEXT);
         final EditText port = field("Port (default 47810)", InputType.TYPE_CLASS_NUMBER);
@@ -132,29 +145,217 @@ public class MainActivity extends Activity {
         } catch (Exception ignored) {}
     }
 
-    // ---------- dashboard screen ----------
+    // ---------- dashboard screen (Aria chat + Fleet web) ----------
     private void showDashboard() {
         rootView.removeAllViews();
         LinearLayout colv = col();
 
-        // toolbar
+        // toolbar: [ Aria | Fleet ]  status …  Phone access  ⚙
         LinearLayout bar = new LinearLayout(this);
         bar.setOrientation(LinearLayout.HORIZONTAL);
         bar.setBackgroundColor(0xFF161B22);
         bar.setPadding(dp(8), dp(8), dp(8), dp(8));
         bar.setGravity(Gravity.CENTER_VERTICAL);
+        tabAria = smallButton("Aria", v -> selectTab(true));
+        tabFleet = smallButton("Fleet", v -> selectTab(false));
+        bar.addView(tabAria);
+        bar.addView(space(4));
+        bar.addView(tabFleet);
         statusLine = new TextView(this);
         statusLine.setTextColor(0xFF8B98A9);
-        statusLine.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        statusLine.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+        statusLine.setGravity(Gravity.END);
         statusLine.setText(statusText());
         statusLine.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         bar.addView(statusLine);
-        bar.addView(smallButton("Phone access", v -> showAgentPanel()));
         bar.addView(space(6));
-        bar.addView(smallButton("⚙", v -> { store.setConnection("", store.port(), "", ""); showSetup(); }));
+        bar.addView(smallButton("⚙", v -> showAgentPanel()));
         colv.addView(bar);
 
-        // WebView to control the PC
+        FrameLayout content = new FrameLayout(this);
+        content.setLayoutParams(new LinearLayout.LayoutParams(-1, 0, 1f));
+        ariaView = buildAriaView();
+        fleetView = buildFleetView();
+        content.addView(ariaView);
+        content.addView(fleetView);
+        colv.addView(content);
+
+        rootView.addView(colv);
+        selectTab(true); // Aria is home
+    }
+
+    private void selectTab(boolean aria) {
+        if (ariaView == null) return;
+        ariaView.setVisibility(aria ? View.VISIBLE : View.GONE);
+        fleetView.setVisibility(aria ? View.GONE : View.VISIBLE);
+        tabAria.setBackgroundColor(aria ? 0xFF2D6FD6 : 0xFF1C2230);
+        tabFleet.setBackgroundColor(aria ? 0xFF1C2230 : 0xFF2D6FD6);
+        if (!aria && !fleetLoaded) { fleetLoaded = true; loadDashboard(); }
+        if (aria && chatInput != null) chatInput.requestFocus();
+    }
+
+    // ---- Aria chat view ----
+    private View buildAriaView() {
+        LinearLayout v = col();
+        v.setBackgroundColor(0xFF0D1117);
+
+        chatScroll = new ScrollView(this);
+        chatScroll.setLayoutParams(new LinearLayout.LayoutParams(-1, 0, 1f));
+        chatScroll.setPadding(dp(12), dp(12), dp(12), dp(6));
+        chatLog = col();
+        chatScroll.addView(chatLog);
+        v.addView(chatScroll);
+
+        addNote("Ask Aria anything. She runs on your PC and can see your BridgeDesk fleet. "
+                + "Reading is free; turn on “Allow changes” before asking her to run commands, "
+                + "send messages, move files or control a device.");
+
+        // allow-changes row
+        LinearLayout acRow = new LinearLayout(this);
+        acRow.setOrientation(LinearLayout.HORIZONTAL);
+        acRow.setGravity(Gravity.CENTER_VERTICAL);
+        acRow.setPadding(dp(12), 0, dp(12), 0);
+        TextView acl = new TextView(this);
+        acl.setText("Allow changes (run commands, send, control)");
+        acl.setTextColor(0xFF8B98A9);
+        acl.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        acl.setLayoutParams(new LinearLayout.LayoutParams(0, -2, 1f));
+        Switch acsw = new Switch(this);
+        acsw.setChecked(allowChanges);
+        acsw.setOnCheckedChangeListener((b, on) -> allowChanges = on);
+        acRow.addView(acl);
+        acRow.addView(acsw);
+        v.addView(acRow);
+
+        // input row
+        LinearLayout inRow = new LinearLayout(this);
+        inRow.setOrientation(LinearLayout.HORIZONTAL);
+        inRow.setGravity(Gravity.CENTER_VERTICAL);
+        inRow.setPadding(dp(8), dp(4), dp(8), dp(8));
+        chatInput = new EditText(this);
+        chatInput.setHint("Message Aria…");
+        chatInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+        chatInput.setMaxLines(4);
+        chatInput.setTextColor(0xFFE6EDF3);
+        chatInput.setHintTextColor(0xFF6B7684);
+        chatInput.setBackgroundColor(0xFF161B22);
+        chatInput.setPadding(dp(12), dp(10), dp(12), dp(10));
+        chatInput.setLayoutParams(new LinearLayout.LayoutParams(0, -2, 1f));
+        sendBtn = button("Send", true);
+        LinearLayout.LayoutParams sbp = new LinearLayout.LayoutParams(-2, -2);
+        sbp.leftMargin = dp(8); sbp.topMargin = 0;
+        sendBtn.setLayoutParams(sbp);
+        sendBtn.setOnClickListener(x -> onSend());
+        inRow.addView(chatInput);
+        inRow.addView(sendBtn);
+        v.addView(inRow);
+
+        if (ai == null) ai = new AiClient(store, new ChatListener());
+        return v;
+    }
+
+    private void onSend() {
+        if (busy) { ai.cancel(); return; }
+        String text = chatInput.getText().toString().trim();
+        if (text.isEmpty()) return;
+        chatInput.setText("");
+        addBubble(true, text);
+        ariaBubble = addBubble(false, "");
+        ariaBubble.setText("…");
+        setBusy(true);
+        ai.ask(text, allowChanges, null);
+    }
+
+    private void setBusy(boolean b) {
+        busy = b;
+        if (sendBtn != null) sendBtn.setText(b ? "Stop" : "Send");
+    }
+
+    /** A chat bubble. user = right/blue, assistant = left/gray. Returns its TextView. */
+    private TextView addBubble(boolean user, String text) {
+        TextView t = new TextView(this);
+        t.setText(text);
+        t.setTextColor(user ? 0xFFFFFFFF : 0xFFE6EDF3);
+        t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        t.setBackgroundColor(user ? 0xFF2D6FD6 : 0xFF161B22);
+        t.setPadding(dp(12), dp(10), dp(12), dp(10));
+        t.setTextIsSelectable(true);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
+        lp.gravity = user ? Gravity.END : Gravity.START;
+        lp.topMargin = dp(6);
+        lp.leftMargin = user ? dp(40) : 0;
+        lp.rightMargin = user ? 0 : dp(40);
+        t.setLayoutParams(lp);
+        chatLog.addView(t);
+        scrollDown();
+        return t;
+    }
+
+    private void addNote(String text) {
+        TextView t = new TextView(this);
+        t.setText(text);
+        t.setTextColor(0xFF6B7684);
+        t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        t.setPadding(dp(2), dp(4), dp(2), dp(8));
+        chatLog.addView(t);
+    }
+
+    private void addToolChip(String name) {
+        TextView t = new TextView(this);
+        t.setText("⚙ " + name);
+        t.setTextColor(0xFF8B98A9);
+        t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
+        lp.topMargin = dp(4);
+        t.setLayoutParams(lp);
+        chatLog.addView(t);
+        scrollDown();
+    }
+
+    private void scrollDown() {
+        if (chatScroll != null) chatScroll.post(() -> chatScroll.fullScroll(View.FOCUS_DOWN));
+    }
+
+    /** Streams one turn from the hub relay onto the chat, all on the UI thread. */
+    private class ChatListener implements AiClient.Listener {
+        public void onDelta(final String text) {
+            runOnUiThread(() -> {
+                if (ariaBubble == null) ariaBubble = addBubble(false, "");
+                String cur = ariaBubble.getText().toString();
+                if (cur.equals("…")) cur = "";
+                ariaBubble.setText(cur.isEmpty() ? text : cur + "\n" + text);
+                scrollDown();
+            });
+        }
+        public void onTool(final String name) {
+            runOnUiThread(() -> { addToolChip(name); ariaBubble = null; });
+        }
+        public void onDone(final String session, final String text) {
+            runOnUiThread(() -> {
+                if (ariaBubble != null && "…".equals(ariaBubble.getText().toString())) {
+                    ariaBubble.setText(text == null || text.isEmpty() ? "(no reply)" : text);
+                }
+                ariaBubble = null;
+                setBusy(false);
+                scrollDown();
+            });
+        }
+        public void onError(final String message) {
+            runOnUiThread(() -> {
+                if (ariaBubble != null && "…".equals(ariaBubble.getText().toString())) chatLog.removeView(ariaBubble);
+                ariaBubble = null;
+                TextView t = addBubble(false, "⚠ " + message);
+                t.setTextColor(0xFFF0883E);
+                setBusy(false);
+            });
+        }
+        public void onStatus(final String status) {
+            runOnUiThread(() -> { if (statusLine != null) statusLine.setText("PC " + store.host() + "  ·  Aria " + status); });
+        }
+    }
+
+    // ---- Fleet (PC dashboard) view ----
+    private View buildFleetView() {
         web = new WebView(this);
         WebSettings ws = web.getSettings();
         ws.setJavaScriptEnabled(true);
@@ -164,7 +365,6 @@ public class MainActivity extends Activity {
         ws.setDisplayZoomControls(false);
         web.setWebViewClient(new PinnedWebViewClient());
         web.setWebChromeClient(new WebChromeClient() {
-            // <input type=file> (Upload) needs an explicit chooser in a WebView.
             @Override public boolean onShowFileChooser(WebView v, ValueCallback<Uri[]> cb, FileChooserParams params) {
                 if (pendingChooser != null) pendingChooser.onReceiveValue(null);
                 pendingChooser = cb;
@@ -178,14 +378,9 @@ public class MainActivity extends Activity {
                 return true;
             }
         });
-        // Downloads from the PC: a WebView ignores them unless we handle them ourselves.
         web.setDownloadListener((url, ua, contentDisposition, mime, length) ->
                 downloadToPhone(url, contentDisposition, mime));
-        web.setLayoutParams(new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
-        colv.addView(web);
-
-        rootView.addView(colv);
-        loadDashboard();
+        return web;
     }
 
     private void loadDashboard() {
@@ -234,6 +429,14 @@ public class MainActivity extends Activity {
         Button back = button("Done", true);
         back.setOnClickListener(v -> { showDashboard(); });
         c.addView(back);
+        Button changePc = button("Change PC / disconnect", false);
+        changePc.setOnClickListener(v -> {
+            if (ai != null) { ai.close(); ai = null; }
+            fleetLoaded = false;
+            store.setConnection("", store.port(), "", "");
+            showSetup();
+        });
+        c.addView(changePc);
         sv.addView(c);
         rootView.removeAllViews();
         rootView.addView(sv);
@@ -423,7 +626,13 @@ public class MainActivity extends Activity {
     }
 
     @Override public void onBackPressed() {
-        if (web != null && web.canGoBack()) web.goBack(); else super.onBackPressed();
+        if (fleetView != null && fleetView.getVisibility() == View.VISIBLE && web != null && web.canGoBack()) web.goBack();
+        else super.onBackPressed();
+    }
+
+    @Override protected void onDestroy() {
+        if (ai != null) { ai.close(); ai = null; }
+        super.onDestroy();
     }
 
     // ---------- tiny UI helpers ----------

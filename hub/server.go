@@ -636,6 +636,10 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		send(map[string]any{"event": event, "params": n})
 	}))
 
+	// One Aria (claude CLI) turn may be in flight per connection; ai.cancel kills it.
+	ai := &aiSession{}
+	defer ai.cancel()
+
 	for {
 		var msg struct {
 			ID     int64           `json:"id"`
@@ -671,6 +675,26 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 			})
 			subs = append(subs, unsub)
 			send(map[string]any{"id": msg.ID, "result": "subscribed"})
+		case "ai.ask":
+			// Relay a phone prompt to the local Claude CLI and stream the reply back.
+			var req aiReq
+			json.Unmarshal(msg.Params, &req)
+			id := msg.ID
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+				defer cancel()
+				session, text, err := s.runAI(ctx, req, func(event string, p any) {
+					send(map[string]any{"event": event, "params": p})
+				}, ai.set)
+				if err != nil {
+					send(map[string]any{"id": id, "error": err.Error(), "result": map[string]any{"session": session}})
+					return
+				}
+				send(map[string]any{"id": id, "result": map[string]any{"session": session, "text": text}})
+			}()
+		case "ai.cancel":
+			ai.cancel()
+			send(map[string]any{"id": msg.ID, "result": "cancelled"})
 		}
 	}
 }
