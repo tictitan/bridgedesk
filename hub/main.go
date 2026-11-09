@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"strings"
 	"sync"
 	"syscall"
 )
@@ -55,6 +56,37 @@ func main() {
 			cfg.AccessKey = randomKey(16)
 			cfg.Save()
 			fmt.Println("new access key:", cfg.AccessKey)
+			return
+		case "google":
+			// bridgedesk google on <email>[,<email2>...]   |   google off   |   google status
+			attachParentConsole()
+			cfg, _ := loadConfig()
+			sub := ""
+			if len(os.Args) > 2 {
+				sub = os.Args[2]
+			}
+			switch sub {
+			case "on":
+				if len(os.Args) > 3 {
+					if list, ok := strList(os.Args[3]); ok {
+						cfg.GoogleEmails = list
+					}
+				}
+				if len(cfg.GoogleEmails) == 0 {
+					fmt.Println("usage: bridgedesk google on you@gmail.com[,other@domain]")
+					return
+				}
+				cfg.RequireGoogle = true
+				cfg.Save()
+				fmt.Printf("Google sign-in REQUIRED. Allowed: %s\n", strings.Join(cfg.GoogleEmails, ", "))
+			case "off":
+				cfg.RequireGoogle = false
+				cfg.Save()
+				fmt.Println("Google sign-in requirement OFF (access key + TLS pin still apply).")
+			default:
+				fmt.Printf("Google sign-in: %v\nAllowed emails: %s\nAccepted client IDs: %s\n",
+					cfg.RequireGoogle, strings.Join(cfg.GoogleEmails, ", "), strings.Join(cfg.GoogleClients, ", "))
+			}
 			return
 		case "-h", "--help", "help":
 			attachParentConsole()

@@ -121,10 +121,12 @@ public class AiClient {
         listener.onStatus("connecting");
         final String host = store.host();
         final int port = store.port();
-        final String path = "/ws?key=" + enc(store.key());
         final String fp = store.fingerprint();
         new Thread(() -> {
             try {
+                String path = "/ws?key=" + enc(store.key());
+                String gid = GoogleAuth.freshIdToken(store);
+                if (!gid.isEmpty()) path += "&gid=" + enc(gid);
                 WsClient c = new WsClient();
                 this.ws = c;
                 c.connect(host, port, path, fp, new WsClient.Listener() {

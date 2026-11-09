@@ -80,7 +80,10 @@ public class AgentService extends Service {
                 if (host.isEmpty()) { sleep(3000); continue; }
                 ws = new WsClient();
                 final Object done = new Object();
-                ws.connect(host, store.port(), "/link?key=" + enc(store.key()), store.fingerprint(), new WsClient.Listener() {
+                String path = "/link?key=" + enc(store.key());
+                String gid = GoogleAuth.freshIdToken(store);
+                if (!gid.isEmpty()) path += "&gid=" + enc(gid);
+                ws.connect(host, store.port(), path, store.fingerprint(), new WsClient.Listener() {
                     public void onOpen() {
                         connected = true;
                         updateNote("Connected to " + store.host());

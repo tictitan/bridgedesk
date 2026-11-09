@@ -30,6 +30,30 @@ public class Store {
     public void setAgentEnabled(boolean v) { sp.edit().putBoolean("agent", v).apply(); }
     public void setAllow(String which, boolean v) { sp.edit().putBoolean(which, v).apply(); }
 
+    // ---- Google sign-in (optional; needed when the hub requires it, e.g. over the internet) ----
+    public String gClientId() { return sp.getString("gClientId", ""); }
+    public String gClientSecret() { return sp.getString("gClientSecret", ""); }
+    public String gRefreshToken() { return sp.getString("gRefresh", ""); }
+    public String gIdToken() { return sp.getString("gIdToken", ""); }
+    public long gIdExpMs() { return sp.getLong("gIdExp", 0); }
+    public String gEmail() { return sp.getString("gEmail", ""); }
+    public boolean googleConfigured() { return !gClientId().isEmpty() && !gRefreshToken().isEmpty(); }
+
+    public void setGoogleClient(String id, String secret) {
+        sp.edit().putString("gClientId", id == null ? "" : id.trim())
+                 .putString("gClientSecret", secret == null ? "" : secret.trim()).apply();
+    }
+    public void setGoogleTokens(String refresh, String idToken, long idExpMs, String email) {
+        android.content.SharedPreferences.Editor e = sp.edit();
+        if (refresh != null && !refresh.isEmpty()) e.putString("gRefresh", refresh);
+        e.putString("gIdToken", idToken == null ? "" : idToken)
+         .putLong("gIdExp", idExpMs)
+         .putString("gEmail", email == null ? "" : email).apply();
+    }
+    public void clearGoogle() {
+        sp.edit().remove("gRefresh").remove("gIdToken").remove("gIdExp").remove("gEmail").apply();
+    }
+
     public String deviceId() {
         String id = sp.getString("deviceId", null);
         if (id == null) {

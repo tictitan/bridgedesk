@@ -117,8 +117,46 @@ cd hub
 ARIA_AI_SELFTEST=1 go test -run Selftest -v          # single-turn + fleet; real Claude calls, skipped otherwise
 ```
 
-## Possible phase 2
+## Restrict access to your Google account(s)
 
-A standalone on-phone engine (so the phone works when the PC is off), and relaying to the
-full Aria desktop app for email + business tools. Both are out of scope for this build, which
-keeps everything inside this repo (hub + APK) with no changes to the Aria desktop app.
+When the hub is reachable from the internet, you can require that every client is **signed in to
+one of your Google accounts** — on top of the TLS pin and the access key (defense in depth). The
+real gate is an **email allowlist**; the access key still applies.
+
+How it works: the phone signs in with Google (loopback + PKCE, same as Aria desktop — no Google
+Play Services), gets a signed **ID token**, and sends it on every connection. The hub verifies the
+token offline (RS256 signature via Google's published keys, issuer, expiry, `email_verified`) and
+checks the email against the allowlist. Pure Go stdlib, no new deps. See `hub/google_auth.go`
+(+ tests in `hub/google_auth_test.go`) and `android/.../GoogleAuth.java`.
+
+**Turn it on (PC):**
+
+```bash
+bridgedesk google on you@gmail.com            # require sign-in; allow this account (comma-separate more)
+bridgedesk google status                      # show current setting
+bridgedesk google off                         # back to key-only
+```
+
+(or POST `requireGoogle` / `googleEmails` / `googleClients` to `/api/settings`.)
+
+**Sign in (phone):** Aria → ⚙ Phone access → *Google account* → paste your **OAuth client ID**
+(and secret, for a Desktop-type client) → **Sign in**. Reuse the same client you set up for Aria
+desktop. Anyone else you allow simply uses **their own** OAuth client and their own allowlisted
+email — the hub accepts any Google client by default; set `googleClients` to pin specific ones.
+
+Notes: ID tokens last ~1 h and the phone refreshes silently via the stored refresh token; the
+dashboard WebView gets a short-lived `aria_gid` cookie after a verified load. The MCP port (47811)
+stays loopback-only and is unaffected.
+
+## Possible next phase — multi-account email (Gmail, Outlook, …)
+
+Let Aria read and help with several mail accounts from the phone. Email lives in the Aria desktop
+app today and the phone relay can't reach it, so the clean path is a **self-contained email module
+in the hub** exposed to the relay as its own MCP: Gmail via the Google OAuth above (add the Gmail
+scope), Outlook/Microsoft 365 via Microsoft Graph OAuth, each account added independently. Reads
+free, sending gated by *Allow changes* — same safety model. Not built yet.
+
+## Other possible work
+
+A standalone on-phone engine (so the phone works when the PC is off). Out of scope for this build,
+which keeps everything inside this repo (hub + APK) with no changes to the Aria desktop app.

@@ -479,8 +479,15 @@ public class MainActivity extends Activity {
     }
 
     private void loadDashboard() {
-        String url = "https://" + store.host() + ":" + store.port() + "/?key=" + Uri.encode(store.key());
-        web.loadUrl(url);
+        final String base = "https://" + store.host() + ":" + store.port() + "/?key=" + Uri.encode(store.key());
+        if (!store.googleConfigured()) { web.loadUrl(base); return; }
+        // Fetching/refreshing the Google token may touch the network — do it off the UI thread,
+        // then load with ?gid so the hub sets its cookie for the WebView's later requests.
+        new Thread(() -> {
+            String gid = GoogleAuth.freshIdToken(store);
+            final String url = gid.isEmpty() ? base : base + "&gid=" + Uri.encode(gid);
+            runOnUiThread(() -> { if (web != null) web.loadUrl(url); });
+        }, "dash-gid").start();
     }
 
     private String statusText() {
@@ -496,6 +503,32 @@ public class MainActivity extends Activity {
         c.setBackgroundColor(0xFF0D1117);
         c.addView(title("Let the PC use this phone"));
         c.addView(hint("Turn these on so your PC (and Claude) can view and control this phone. You can stop anytime from the notification."));
+
+        // --- Google sign-in (needed when the hub requires it, e.g. over the internet) ---
+        c.addView(sectionLabel("Google account"));
+        c.addView(hint("If the hub requires Google sign-in, connect the account that's allowed on the PC. "
+                + "Paste your Google OAuth client ID (and secret, for a Desktop-type client)."));
+        final EditText gid = field("Google OAuth client ID", InputType.TYPE_CLASS_TEXT);
+        gid.setText(store.gClientId());
+        final EditText gsec = field("Client secret (Desktop client; optional)", InputType.TYPE_CLASS_TEXT);
+        gsec.setText(store.gClientSecret());
+        c.addView(gid); c.addView(gsec);
+        final TextView gstatus = hint(store.gEmail().isEmpty() ? "Not signed in." : "Signed in as " + store.gEmail());
+        c.addView(actionRow("Sign in with Google", "Opens Google in your browser.",
+                store.gEmail().isEmpty() ? "Sign in" : "Re-sign in", v -> {
+            store.setGoogleClient(gid.getText().toString(), gsec.getText().toString());
+            gstatus.setText("Opening Google…");
+            GoogleAuth.signIn(this, store, new GoogleAuth.SignInCb() {
+                public void onResult(String email) { runOnUiThread(() -> { gstatus.setText("Signed in as " + email); toast("Signed in as " + email); }); }
+                public void onError(String msg) { runOnUiThread(() -> { gstatus.setText("Sign-in failed: " + msg); toast("Sign-in failed: " + msg); }); }
+            });
+        }));
+        c.addView(gstatus);
+        if (!store.gEmail().isEmpty()) {
+            c.addView(actionRow("Sign out of Google", "Forget the saved Google tokens on this phone.",
+                    "Sign out", v -> { store.clearGoogle(); toast("Signed out"); showAgentPanel(); }));
+        }
+        c.addView(sectionLabel("Phone sharing & control"));
 
         c.addView(toggleRow("Share this phone with the PC", store.agentEnabled(), on -> {
             if (on) { store.setAgentEnabled(true); AgentService.startAgent(this); }
@@ -734,6 +767,7 @@ public class MainActivity extends Activity {
     private LinearLayout col() { LinearLayout l = new LinearLayout(this); l.setOrientation(LinearLayout.VERTICAL); l.setLayoutParams(new ViewGroup.LayoutParams(-1, -1)); return l; }
     private TextView title(String t) { TextView v = new TextView(this); v.setText(t); v.setTextColor(0xFFE6EDF3); v.setTextSize(TypedValue.COMPLEX_UNIT_SP, 24); v.setPadding(0, 0, 0, dp(10)); return v; }
     private TextView hint(String t) { TextView v = new TextView(this); v.setText(t); v.setTextColor(0xFF8B98A9); v.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13); v.setPadding(0, dp(4), 0, dp(14)); return v; }
+    private TextView sectionLabel(String t) { TextView v = new TextView(this); v.setText(t); v.setTextColor(0xFF58A6FF); v.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13); v.setPadding(0, dp(14), 0, dp(4)); return v; }
     private EditText field(String hintTxt, int type) {
         EditText e = new EditText(this); e.setHint(hintTxt); e.setInputType(type);
         e.setTextColor(0xFFE6EDF3); e.setHintTextColor(0xFF6B7684); e.setBackgroundColor(0xFF161B22);
