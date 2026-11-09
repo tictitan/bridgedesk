@@ -26,6 +26,8 @@ type peerFrame struct {
 	Result json.RawMessage `json:"result,omitempty"`
 	Error  string          `json:"error,omitempty"`
 	Event  string          `json:"event,omitempty"`
+	TTL    int             `json:"ttl,omitempty"`  // remaining forward hops for a relay (loop/length guard)
+	Path   []string        `json:"path,omitempty"` // hub ids already on this relay's path (so it never loops back)
 }
 
 // PeerHub is a live mesh session with another hub. It advertises that hub's roster to us and
@@ -52,10 +54,27 @@ func (p *PeerHub) write(f peerFrame) error {
 	return p.conn.WriteJSON(f)
 }
 
-func (p *PeerHub) setRoster(r []DeviceInfo) {
+// setRoster stores a peer's advertised devices; returns true if it actually changed (so we only re-broadcast then).
+func (p *PeerHub) setRoster(r []DeviceInfo) bool {
 	p.rmu.Lock()
+	defer p.rmu.Unlock()
+	if sameRoster(p.roster, r) {
+		return false
+	}
 	p.roster = r
-	p.rmu.Unlock()
+	return true
+}
+
+func sameRoster(a, b []DeviceInfo) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].ID != b[i].ID || a[i].Hops != b[i].Hops || a[i].Online != b[i].Online || a[i].Name != b[i].Name {
+			return false
+		}
+	}
+	return true
 }
 
 func (p *PeerHub) rosterCopy() []DeviceInfo {
@@ -83,8 +102,9 @@ func (p *PeerHub) sendEvent(target string, e Event) {
 	p.write(peerFrame{Kind: "relayEvent", Target: target, Event: e.Event, Params: e.Params})
 }
 
-// relayCall sends an RPC to a device owned by the peer hub and waits for the result.
-func (p *PeerHub) relayCall(ctx context.Context, target, method string, params json.RawMessage) (json.RawMessage, error) {
+// relayCall sends an RPC toward a device reachable through this peer and waits for the result. ttl/path travel with
+// the frame so the owning hub (or an intermediate one) can forward it another hop without looping.
+func (p *PeerHub) relayCall(ctx context.Context, target, method string, params json.RawMessage, ttl int, path []string) (json.RawMessage, error) {
 	rid := p.nextRID.Add(1)
 	ch := make(chan peerFrame, 1)
 	p.pmu.Lock()
@@ -95,7 +115,7 @@ func (p *PeerHub) relayCall(ctx context.Context, target, method string, params j
 		delete(p.pending, rid)
 		p.pmu.Unlock()
 	}()
-	if err := p.write(peerFrame{Kind: "relay", RID: rid, Target: target, Method: method, Params: params}); err != nil {
+	if err := p.write(peerFrame{Kind: "relay", RID: rid, Target: target, Method: method, Params: params, TTL: ttl, Path: path}); err != nil {
 		return nil, err
 	}
 	timeout := 120 * time.Second
@@ -120,25 +140,13 @@ func (p *PeerHub) relayCall(ctx context.Context, target, method string, params j
 func (p *PeerHub) handle(f peerFrame) {
 	switch f.Kind {
 	case "roster":
-		p.setRoster(f.Roster)
+		if p.setRoster(f.Roster) {
+			p.s.hub.broadcastRoster() // reachability changed: propagate it one hop further out
+		}
 	case "book":
 		p.s.mergeBook(f.Book)
 	case "relay":
-		go func() {
-			dev := p.s.hub.getOwned(f.Target)
-			if dev == nil {
-				p.write(peerFrame{Kind: "relayResult", RID: f.RID, Error: "device not reachable from its hub"})
-				return
-			}
-			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Hour) // long UE builds/cooks
-			defer cancel()
-			res, err := dev.Call(ctx, f.Method, f.Params)
-			if err != nil {
-				p.write(peerFrame{Kind: "relayResult", RID: f.RID, Error: err.Error()})
-				return
-			}
-			p.write(peerFrame{Kind: "relayResult", RID: f.RID, Result: res})
-		}()
+		go p.serveRelay(f)
 	case "relayResult":
 		p.pmu.Lock()
 		ch := p.pending[f.RID]
@@ -151,15 +159,59 @@ func (p *PeerHub) handle(f peerFrame) {
 	}
 }
 
-// RelayDevice makes a device owned by a peer hub look like a local Device, routing calls over the mesh.
+// serveRelay answers a relay for a device we own, or forwards it another hop toward a device we can reach but the
+// sender can't. The frame's path (hub ids already traversed) and ttl keep forwarding loop-free and bounded.
+func (p *PeerHub) serveRelay(f peerFrame) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Hour) // long UE builds/cooks
+	defer cancel()
+	reply := func(res json.RawMessage, err error) {
+		if err != nil {
+			p.write(peerFrame{Kind: "relayResult", RID: f.RID, Error: err.Error()})
+		} else {
+			p.write(peerFrame{Kind: "relayResult", RID: f.RID, Result: res})
+		}
+	}
+	if dev := p.s.hub.getOwned(f.Target); dev != nil {
+		reply(dev.Call(ctx, f.Method, f.Params))
+		return
+	}
+	// not ours: forward through the best next hop that isn't already on the path (and not the sender)
+	ttl := f.TTL
+	if ttl <= 0 {
+		ttl = maxRelayHops
+	}
+	if ttl <= 1 {
+		reply(nil, errors.New("no route to device (hop limit reached)"))
+		return
+	}
+	avoid := map[string]bool{p.id: true}
+	for _, id := range f.Path {
+		avoid[id] = true
+	}
+	np, _, ok := p.s.hub.route(f.Target, avoid)
+	if !ok {
+		reply(nil, errors.New("device not reachable from this hub"))
+		return
+	}
+	path := append(append([]string{}, f.Path...), p.s.hub.local.Info().ID)
+	reply(np.relayCall(ctx, f.Target, f.Method, f.Params, ttl-1, path))
+}
+
+// RelayDevice makes a device reachable through a peer hub look like a local Device, routing calls over the mesh
+// (and, if that hub doesn't own the device either, letting it forward another hop).
 type RelayDevice struct {
 	peer *PeerHub
 	info DeviceInfo
+	ttl  int
 }
 
 func (r *RelayDevice) Info() DeviceInfo { return r.info }
 func (r *RelayDevice) Call(ctx context.Context, method string, params json.RawMessage) (json.RawMessage, error) {
-	return r.peer.relayCall(ctx, r.info.ID, method, params)
+	ttl := r.ttl
+	if ttl <= 0 {
+		ttl = maxRelayHops
+	}
+	return r.peer.relayCall(ctx, r.info.ID, method, params, ttl, []string{r.peer.s.hub.local.Info().ID})
 }
 
 // runPeerSession runs a symmetric mesh session after the hello handshake. Blocks until disconnect.
@@ -175,9 +227,11 @@ func (s *Server) runPeerSession(conn *websocket.Conn, peerInfo DeviceInfo, diale
 	}
 	log.Printf("hub meshed: %s (%s)", p.name, peerInfo.Kind)
 
-	// initial exchange: our owned devices + our address book (for gossip)
-	p.sendRoster(s.hub.ownedRoster())
+	// initial exchange: everything we can reach (split-horizon for this peer) + our address book (for gossip)
+	p.sendRoster(s.hub.perPeerRoster(p.id))
 	p.sendBook(s.bookSnapshot())
+	// tell our other peers this new hub's devices are now reachable through us (after it sends its roster)
+	defer s.hub.broadcastRoster()
 
 	conn.SetReadLimit(64 << 20)
 	conn.SetPongHandler(func(string) error { conn.SetReadDeadline(time.Now().Add(90 * time.Second)); return nil })
