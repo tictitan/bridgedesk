@@ -109,9 +109,10 @@ public class MainActivity extends Activity {
         setup.setPadding(dp(22), dp(40), dp(22), dp(22));
 
         setup.addView(title("Aria"));
-        setup.addView(hint("Your assistant on the phone, powered by the Aria/BridgeDesk hub on your PC. On the PC, open BridgeDesk and read the access key and one of the LAN addresses — or scan the dashboard QR."));
+        setup.addView(hint("Your assistant on the phone, powered by the Aria/BridgeDesk hub on your PC. On the PC, open BridgeDesk and read the access key and one of the LAN addresses — or scan the dashboard QR. To reach home from anywhere, enter your home DNS name (see “Reach it from anywhere” below)."));
 
-        final EditText host = field("PC address or IP (e.g. 192.168.1.20)", InputType.TYPE_CLASS_TEXT);
+        final EditText host = field("PC address — LAN IP or DNS name (e.g. 192.168.1.20 or myhome.duckdns.org)",
+                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
         final EditText port = field("Port (default 47810)", InputType.TYPE_CLASS_NUMBER);
         port.setText("47810");
         final EditText key = field("Access key (XXXX-XXXX-XXXX-XXXX)", InputType.TYPE_CLASS_TEXT);
@@ -128,7 +129,9 @@ public class MainActivity extends Activity {
             showDashboard();
         });
         setup.addView(connect);
-        setup.addView(hint("Tip: you can paste a full link like bd://192.168.1.20:47810?key=...&fp=... into the address box."));
+        setup.addView(hint("Tip: paste a full link like bd://myhome.duckdns.org:47810?key=...&fp=... (IP or DNS name) into the address box."));
+        setup.addView(sectionLabel("Reach it from anywhere"));
+        setup.addView(hint("On your router: forward TCP port 47810 to this PC and point a dynamic-DNS name (e.g. DuckDNS/No-IP, or your router's built-in DDNS) at your home. Then enter that DNS name above with the same access key and fingerprint — the connection is pinned to the hub's certificate, so a changing home IP still verifies. (If your ISP blocks 47810, forward 443 → 47810 and use port 443.)"));
         host.addTextChangedListener(new SimpleWatcher(s -> maybeParseLink(s, host, port, key, fp)));
 
         sv.addView(setup);

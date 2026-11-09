@@ -102,6 +102,27 @@ unchanged.
    do something that changes a device. The **Fleet** tab is still the full PC dashboard, and
    **⚙ → Phone access** still shares this phone with your PCs.
 
+## Reach it from anywhere (DNS name)
+
+You can connect over the internet, not just the LAN, by entering a **DNS name** in the connect
+screen instead of a LAN IP. Because the phone pins the hub's certificate by SHA-256 fingerprint and
+does no hostname check, a home **dynamic-DNS** name whose WAN IP changes still verifies — the pin
+is the identity, not the address. The Aria chat (`wss://<host>:47810`), the Fleet dashboard and the
+phone↔PC link all use that same host, so all three work with the hostname.
+
+On your router:
+
+1. **Port-forward** TCP **47810** → this PC's LAN IP (give the PC a static DHCP lease). If your ISP
+   blocks 47810, forward **443 → 47810** and use port 443 in the app.
+2. Point a **dynamic-DNS** name at your home — DuckDNS/No-IP, or your router's built-in DDNS
+   (e.g. `myhome.duckdns.org`).
+
+Then in the app enter that DNS name, the same access key, and the fingerprint (strongly recommended
+over the internet — it's what makes the changing-IP pinning safe). No hub change is needed: the hub
+already listens on all interfaces (`0.0.0.0:47810`) and the fingerprint pin covers the new host.
+Combine with the Google-account lock above so a leaked key alone can't connect. The loopback MCP
+port (47811) is never exposed.
+
 ## Config knobs
 
 - `ARIA_CLAUDE_BIN` (PC env): path to the `claude` binary if it isn't auto-found.
