@@ -79,6 +79,20 @@ func main() {
 				cfg.RequireGoogle = true
 				cfg.Save()
 				fmt.Printf("Google sign-in REQUIRED. Allowed: %s\n", strings.Join(cfg.GoogleEmails, ", "))
+			case "login":
+				// bridgedesk google login <clientId> [secret] — give THIS hub a Google identity
+				// so it can authenticate to peer hubs (and sign the owner into its own allowlist).
+				email, refresh, err := enrollHubGoogle(argAt(3), argAt(4))
+				if err != nil {
+					fmt.Println("error:", err)
+					return
+				}
+				cfg.HubGoogleClientID = argAt(3)
+				cfg.HubGoogleSecret = argAt(4)
+				cfg.HubGoogleRefresh = refresh
+				cfg.Save()
+				fmt.Printf("This hub is signed in as %s. It will present this identity to peer hubs.\n", email)
+				fmt.Printf("To require it fleet-wide:  bridgedesk google on %s\n", email)
 			case "off":
 				cfg.RequireGoogle = false
 				cfg.Save()

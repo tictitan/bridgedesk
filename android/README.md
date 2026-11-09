@@ -167,7 +167,26 @@ email — the hub accepts any Google client by default; set `googleClients` to p
 
 Notes: ID tokens last ~1 h and the phone refreshes silently via the stored refresh token; the
 dashboard WebView gets a short-lived `aria_gid` cookie after a verified load. The MCP port (47811)
-stays loopback-only and is unaffected.
+stays loopback-only and is unaffected. **Loopback is always exempt** — your own PC dashboard/MCP on
+127.0.0.1 keeps working without a Google sign-in, so enabling this never locks you out locally.
+
+### Hub-to-hub (peer) sign-in
+
+The same gate covers hubs joining each other's mesh, not just phones/dashboards. Each hub gets its
+own Google identity; when it dials a peer's `/link` (or registers via `/api/links`) it attaches a
+fresh ID token (`X-Aria-Google` header), and the receiving hub — when `requireGoogle` is on —
+verifies it with the email allowlist, on top of the access key and pinned cert. So a peer **hub** is
+admitted to the fleet only if it presents a valid token for an allowed account.
+
+Give each hub (each PC) its own identity, then require it fleet-wide:
+
+```bash
+bridgedesk google login <your-oauth-client-id> [client-secret]   # sign this hub in (opens the browser)
+bridgedesk google on you@gmail.com                               # require it; allow this account
+```
+
+The token is read from the `X-Aria-Google` header, the `gid` query param, or the `aria_gid` cookie
+— the same contract every client uses, so desktop Aria passes its own ID token the same way.
 
 ## Multi-account email (Gmail + Outlook)
 

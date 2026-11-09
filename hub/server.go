@@ -218,9 +218,10 @@ func (s *Server) auth(h http.HandlerFunc) http.HandlerFunc {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		if s.cfg.RequireGoogle {
-			email, err := s.googleGate(googleToken(r))
-			if err != nil {
+		// Loopback (the user's own PC: dashboard/MCP on 127.0.0.1) is never subject to the
+		// Google gate — the key + being local already prove it, and we must not lock the owner out.
+		if s.cfg.RequireGoogle && !isLoopbackReq(r) {
+			if _, err := s.googleGate(googleToken(r)); err != nil {
 				http.Error(w, "google sign-in required: "+err.Error(), http.StatusUnauthorized)
 				return
 			}
@@ -228,7 +229,6 @@ func (s *Server) auth(h http.HandlerFunc) http.HandlerFunc {
 			if tok := r.URL.Query().Get("gid"); tok != "" {
 				http.SetCookie(w, &http.Cookie{Name: "aria_gid", Value: tok, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode})
 			}
-			_ = email
 		}
 		h(w, r)
 	}
@@ -647,7 +647,7 @@ func (s *Server) handleLink(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	if s.cfg.RequireGoogle {
+	if s.cfg.RequireGoogle && !isLoopbackReq(r) {
 		if _, err := s.googleGate(googleToken(r)); err != nil {
 			http.Error(w, "google sign-in required: "+err.Error(), http.StatusUnauthorized)
 			return
@@ -893,6 +893,12 @@ func localIPs() []string {
 	out = append(out, lan...)
 	out = append(out, other...)
 	return out
+}
+
+// isLoopbackReq reports whether the request came from this machine (127.0.0.1 / ::1).
+func isLoopbackReq(r *http.Request) bool {
+	ip := net.ParseIP(sourceIP(r))
+	return ip != nil && ip.IsLoopback()
 }
 
 // sourceIP returns the client IP of an incoming request (no port).
