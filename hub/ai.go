@@ -74,8 +74,15 @@ var aiBuiltinDeny = []string{
 }
 
 const ariaMobilePersona = `You are Aria, the user's personal assistant, reached from their phone.
-You run on their PC and can see and drive their BridgeDesk fleet (their PCs and this phone)
-through the bridge_* tools. Keep replies short and skimmable — this is a small phone screen.
+You run on their PC and can see and drive their whole BridgeDesk fleet — every PC and this
+phone — through the bridge_* tools. Keep replies short and skimmable — this is a small phone screen.
+
+Working across the fleet:
+- To "check the fleet": call bridge_list_devices, then for each ONLINE device read what needs
+  attention (notifications, pending 2FA codes, anything waiting). Give a short per-device
+  summary with the device name as a heading, then note what you could do next.
+- When told to operate on one device, target it by name/id in every bridge_* call and leave the
+  others alone.
 
 Safety:
 - Reading is free (list devices/files, read a file, screenshot, notifications, 2FA codes).
@@ -286,18 +293,105 @@ func aiFirstLine(s string) string {
 	return s
 }
 
-// aiSession tracks the one in-flight CLI process for a single phone connection.
+// aiSession tracks the in-flight work for a single phone connection: the current CLI
+// process (single ask) and/or a cancel func for a whole-fleet run.
 type aiSession struct {
-	mu  sync.Mutex
-	cmd *exec.Cmd
+	mu       sync.Mutex
+	cmd      *exec.Cmd
+	cancelFn context.CancelFunc
 }
 
-func (a *aiSession) set(c *exec.Cmd) { a.mu.Lock(); a.cmd = c; a.mu.Unlock() }
+func (a *aiSession) set(c *exec.Cmd)                { a.mu.Lock(); a.cmd = c; a.mu.Unlock() }
+func (a *aiSession) setCancel(fn context.CancelFunc) { a.mu.Lock(); a.cancelFn = fn; a.mu.Unlock() }
 func (a *aiSession) cancel() {
 	a.mu.Lock()
-	c := a.cmd
+	c, fn := a.cmd, a.cancelFn
 	a.mu.Unlock()
 	if c != nil && c.Process != nil {
 		_ = c.Process.Kill()
 	}
+	if fn != nil {
+		fn()
+	}
+}
+
+// aiFleetReq is the params of an "ai.fleet" message: run one Claude turn per device.
+type aiFleetReq struct {
+	Prompt       string   `json:"prompt"`
+	Devices      []string `json:"devices"` // ids or names; empty = all online devices
+	AllowChanges bool     `json:"allowChanges"`
+	Model        string   `json:"model"`
+}
+
+// runFleet runs the same task on each target device as its own Claude turn, in parallel
+// (capped), each scoped to that one device. Events are tagged with the device name so the
+// phone can show a section per machine. Returns a {device,text[,error]} summary per device.
+func (s *Server) runFleet(ctx context.Context, req aiFleetReq, emit func(event string, params any)) ([]map[string]string, error) {
+	if strings.TrimSpace(req.Prompt) == "" {
+		return nil, fmt.Errorf("empty task")
+	}
+	want := map[string]bool{}
+	for _, d := range req.Devices {
+		want[strings.ToLower(strings.TrimSpace(d))] = true
+	}
+	var targets []DeviceInfo
+	for _, d := range s.hub.List() {
+		if !d.Online {
+			continue
+		}
+		if len(want) > 0 && !want[strings.ToLower(d.ID)] && !want[strings.ToLower(d.Name)] {
+			continue
+		}
+		targets = append(targets, d)
+	}
+	if len(targets) == 0 {
+		return nil, fmt.Errorf("no matching online devices")
+	}
+
+	type res struct {
+		name, text, err string
+	}
+	out := make([]res, len(targets))
+	sem := make(chan struct{}, 4) // bound concurrency (and cost)
+	var wg sync.WaitGroup
+	for i, d := range targets {
+		wg.Add(1)
+		go func(i int, d DeviceInfo) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			emit("ai.fleet.start", map[string]any{"device": d.Name})
+			scoped := fmt.Sprintf("You are operating on ONE device only: %q (id %s, %s). Use the bridge_* "+
+				"tools targeting that device for everything; do not touch other devices.\n\nTask:\n%s",
+				d.Name, d.ID, d.OS, req.Prompt)
+			devEmit := func(ev string, p any) {
+				if m, ok := p.(map[string]any); ok {
+					m["device"] = d.Name
+				}
+				emit(ev, p)
+			}
+			_, text, err := s.runAI(ctx, aiReq{Prompt: scoped, AllowChanges: req.AllowChanges, Model: req.Model}, devEmit, func(*exec.Cmd) {})
+			r := res{name: d.Name, text: text}
+			done := map[string]any{"device": d.Name, "ok": err == nil}
+			if err != nil {
+				r.err = err.Error()
+				done["error"] = r.err
+			} else {
+				done["text"] = text
+			}
+			out[i] = r
+			emit("ai.fleet.done", done)
+		}(i, d)
+	}
+	wg.Wait()
+
+	summary := make([]map[string]string, 0, len(out))
+	for _, r := range out {
+		m := map[string]string{"device": r.name, "text": r.text}
+		if r.err != "" {
+			m["error"] = r.err
+		}
+		summary = append(summary, m)
+	}
+	return summary, nil
 }

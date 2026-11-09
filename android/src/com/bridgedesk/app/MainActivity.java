@@ -59,6 +59,7 @@ public class MainActivity extends Activity {
     private TextView ariaBubble;          // the assistant bubble currently being filled
     private boolean allowChanges = false;
     private boolean busy = false;
+    private java.util.HashMap<String, TextView> fleetBubbles;
     private View ariaView, fleetView;
     private Button tabAria, tabFleet;
     private boolean fleetLoaded = false;
@@ -206,9 +207,20 @@ public class MainActivity extends Activity {
         chatScroll.addView(chatLog);
         v.addView(chatScroll);
 
-        addNote("Ask Aria anything. She runs on your PC and can see your BridgeDesk fleet. "
+        addNote("Ask Aria anything. She runs on your PC and can see your whole BridgeDesk fleet. "
                 + "Reading is free; turn on “Allow changes” before asking her to run commands, "
                 + "send messages, move files or control a device.");
+
+        // fleet quick actions
+        LinearLayout qa = new LinearLayout(this);
+        qa.setOrientation(LinearLayout.HORIZONTAL);
+        qa.setPadding(dp(10), dp(2), dp(10), dp(2));
+        Button checkBtn = smallButton("Check fleet", x -> onCheckFleet());
+        Button runBtn = smallButton("Run on fleet…", x -> onRunFleet());
+        qa.addView(checkBtn);
+        qa.addView(space(6));
+        qa.addView(runBtn);
+        v.addView(qa);
 
         // allow-changes row
         LinearLayout acRow = new LinearLayout(this);
@@ -269,6 +281,47 @@ public class MainActivity extends Activity {
     private void setBusy(boolean b) {
         busy = b;
         if (sendBtn != null) sendBtn.setText(b ? "Stop" : "Send");
+    }
+
+    // Read-only sweep across every online device (single coordinating turn).
+    private void onCheckFleet() {
+        if (busy) { ai.cancel(); return; }
+        addBubble(true, "Check my fleet");
+        ariaBubble = addBubble(false, "…");
+        setBusy(true);
+        ai.ask("Check my fleet: list every online device and, for each, tell me what needs my "
+                + "attention — notifications, any pending 2FA code, anything waiting. Short per-device "
+                + "summary, device name as a heading.", false, null);
+    }
+
+    // Run the text in the box as a task on every online device, one worker each.
+    private void onRunFleet() {
+        if (busy) { ai.cancel(); return; }
+        String task = chatInput.getText().toString().trim();
+        if (task.isEmpty()) { toast("Type a task first, then tap Run on fleet"); chatInput.requestFocus(); return; }
+        chatInput.setText("");
+        addBubble(true, "Run on every device:\n" + task);
+        if (!allowChanges) addNote("Reading only — turn on “Allow changes” for the workers to change anything.");
+        fleetBubbles = new java.util.HashMap<>();
+        setBusy(true);
+        ai.askFleet(task, null, allowChanges);
+    }
+
+    /** Get or create the per-device output bubble for a fleet run (adds a heading the first time). */
+    private TextView fleetBody(String device) {
+        if (fleetBubbles == null) fleetBubbles = new java.util.HashMap<>();
+        TextView body = fleetBubbles.get(device);
+        if (body == null) {
+            TextView head = new TextView(this);
+            head.setText("▸ " + (device == null || device.isEmpty() ? "device" : device));
+            head.setTextColor(0xFF58A6FF);
+            head.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+            head.setPadding(dp(2), dp(10), dp(2), dp(2));
+            chatLog.addView(head);
+            body = addBubble(false, "…");
+            fleetBubbles.put(device, body);
+        }
+        return body;
     }
 
     /** A chat bubble. user = right/blue, assistant = left/gray. Returns its TextView. */
@@ -351,6 +404,48 @@ public class MainActivity extends Activity {
         }
         public void onStatus(final String status) {
             runOnUiThread(() -> { if (statusLine != null) statusLine.setText("PC " + store.host() + "  ·  Aria " + status); });
+        }
+        public void onFleetStart(final String device) {
+            runOnUiThread(() -> fleetBody(device));
+        }
+        public void onFleetDelta(final String device, final String text) {
+            runOnUiThread(() -> {
+                TextView b = fleetBody(device);
+                String cur = b.getText().toString();
+                if (cur.equals("…")) cur = "";
+                b.setText(cur.isEmpty() ? text : cur + "\n" + text);
+                scrollDown();
+            });
+        }
+        public void onFleetTool(final String device, final String name) {
+            runOnUiThread(() -> {
+                TextView b = fleetBody(device);
+                String cur = b.getText().toString();
+                if (cur.equals("…")) cur = "";
+                b.setText((cur.isEmpty() ? "" : cur + "\n") + "⚙ " + name);
+                scrollDown();
+            });
+        }
+        public void onFleetDeviceDone(final String device, final boolean ok, final String text, final String error) {
+            runOnUiThread(() -> {
+                TextView b = fleetBody(device);
+                if (!ok && error != null && !error.isEmpty()) {
+                    b.setText("⚠ " + error);
+                    b.setTextColor(0xFFF0883E);
+                } else if ("…".equals(b.getText().toString())) {
+                    b.setText(text == null || text.isEmpty() ? "(no output)" : text);
+                }
+                scrollDown();
+            });
+        }
+        public void onFleetDone(final org.json.JSONArray devices) {
+            runOnUiThread(() -> {
+                int n = devices == null ? 0 : devices.length();
+                addNote("Finished across " + n + " device" + (n == 1 ? "" : "s") + ".");
+                fleetBubbles = null;
+                setBusy(false);
+                scrollDown();
+            });
         }
     }
 

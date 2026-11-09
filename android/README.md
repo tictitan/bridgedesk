@@ -35,6 +35,22 @@ phone can still be shared to / controlled by your PCs — so nothing you had bef
   `--resume` session id so the conversation continues across messages). The UI lives in
   `MainActivity` as the **Aria** tab.
 
+### Fleet assistant
+
+Two quick actions sit above the chat box:
+
+- **Check fleet** — one coordinating turn: Aria lists every online device and, per device, reports
+  what needs attention (notifications, pending 2FA, anything waiting). Read-only.
+- **Run on fleet…** — type a task, then tap it: the hub runs **one Claude worker per online
+  device** (`ai.fleet`, capped at 4 in parallel), each scoped to its own machine, and the phone
+  shows a live section per device. Honours the **Allow changes** toggle — off = the workers can
+  only read.
+
+`ai.fleet` lives in `hub/ai.go` (`runFleet`): it enumerates `hub.List()`, spawns a `runAI` turn
+per device with a device-scoped prompt, tags every streamed event with the device name
+(`ai.fleet.start` / `ai.delta` / `ai.tool` / `ai.fleet.done`), and returns a per-device summary.
+You can also pass a `devices` list to target specific machines instead of all.
+
 ### Safety model (same spirit as Aria desktop)
 
 - **Reading is free:** list devices/files, read a file, screenshot a device, read
@@ -98,7 +114,7 @@ The hub ships a guarded self-test that drives the real relay against a running h
 
 ```bash
 cd hub
-ARIA_AI_SELFTEST=1 go test -run AISelftest -v        # makes one real Claude call; skipped otherwise
+ARIA_AI_SELFTEST=1 go test -run Selftest -v          # single-turn + fleet; real Claude calls, skipped otherwise
 ```
 
 ## Possible phase 2

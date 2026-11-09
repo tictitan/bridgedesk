@@ -683,6 +683,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 			go func() {
 				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 				defer cancel()
+				ai.setCancel(cancel)
 				session, text, err := s.runAI(ctx, req, func(event string, p any) {
 					send(map[string]any{"event": event, "params": p})
 				}, ai.set)
@@ -691,6 +692,24 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 				send(map[string]any{"id": id, "result": map[string]any{"session": session, "text": text}})
+			}()
+		case "ai.fleet":
+			// Run the same task on every (or selected) online device as its own Claude turn.
+			var freq aiFleetReq
+			json.Unmarshal(msg.Params, &freq)
+			id := msg.ID
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 45*time.Minute)
+				defer cancel()
+				ai.setCancel(cancel)
+				devices, err := s.runFleet(ctx, freq, func(event string, p any) {
+					send(map[string]any{"event": event, "params": p})
+				})
+				if err != nil {
+					send(map[string]any{"id": id, "error": err.Error()})
+					return
+				}
+				send(map[string]any{"id": id, "result": map[string]any{"devices": devices}})
 			}()
 		case "ai.cancel":
 			ai.cancel()
