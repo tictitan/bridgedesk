@@ -60,9 +60,11 @@ public class MainActivity extends Activity {
     private boolean allowChanges = false;
     private boolean busy = false;
     private java.util.HashMap<String, TextView> fleetBubbles;
-    private View ariaView, fleetView;
-    private Button tabAria, tabFleet;
+    private View ariaView, fleetView, dashView;
+    private Button tabAria, tabFleet, tabDash;
+    private LinearLayout dashBody;
     private boolean fleetLoaded = false;
+    private boolean dashLoadedOnce = false;
 
     @Override protected void onCreate(Bundle b) {
         super.onCreate(b);
@@ -160,9 +162,12 @@ public class MainActivity extends Activity {
         bar.setBackgroundColor(0xFF161B22);
         bar.setPadding(dp(8), dp(8), dp(8), dp(8));
         bar.setGravity(Gravity.CENTER_VERTICAL);
-        tabAria = smallButton("Aria", v -> selectTab(true));
-        tabFleet = smallButton("Fleet", v -> selectTab(false));
+        tabAria = smallButton("Aria", v -> selectTab(0));
+        tabDash = smallButton("Dashboard", v -> selectTab(1));
+        tabFleet = smallButton("Fleet", v -> selectTab(2));
         bar.addView(tabAria);
+        bar.addView(space(4));
+        bar.addView(tabDash);
         bar.addView(space(4));
         bar.addView(tabFleet);
         statusLine = new TextView(this);
@@ -179,23 +184,28 @@ public class MainActivity extends Activity {
         FrameLayout content = new FrameLayout(this);
         content.setLayoutParams(new LinearLayout.LayoutParams(-1, 0, 1f));
         ariaView = buildAriaView();
+        dashView = buildDashboardView();
         fleetView = buildFleetView();
         content.addView(ariaView);
+        content.addView(dashView);
         content.addView(fleetView);
         colv.addView(content);
 
         rootView.addView(colv);
-        selectTab(true); // Aria is home
+        selectTab(0); // Aria is home
     }
 
-    private void selectTab(boolean aria) {
+    private void selectTab(int which) {
         if (ariaView == null) return;
-        ariaView.setVisibility(aria ? View.VISIBLE : View.GONE);
-        fleetView.setVisibility(aria ? View.GONE : View.VISIBLE);
-        tabAria.setBackgroundColor(aria ? 0xFF2D6FD6 : 0xFF1C2230);
-        tabFleet.setBackgroundColor(aria ? 0xFF1C2230 : 0xFF2D6FD6);
-        if (!aria && !fleetLoaded) { fleetLoaded = true; loadDashboard(); }
-        if (aria && chatInput != null) chatInput.requestFocus();
+        ariaView.setVisibility(which == 0 ? View.VISIBLE : View.GONE);
+        dashView.setVisibility(which == 1 ? View.VISIBLE : View.GONE);
+        fleetView.setVisibility(which == 2 ? View.VISIBLE : View.GONE);
+        tabAria.setBackgroundColor(which == 0 ? 0xFF2D6FD6 : 0xFF1C2230);
+        tabDash.setBackgroundColor(which == 1 ? 0xFF2D6FD6 : 0xFF1C2230);
+        tabFleet.setBackgroundColor(which == 2 ? 0xFF2D6FD6 : 0xFF1C2230);
+        if (which == 2 && !fleetLoaded) { fleetLoaded = true; loadDashboard(); }
+        if (which == 1 && !dashLoadedOnce) { dashLoadedOnce = true; refreshDashboard(); }
+        if (which == 0 && chatInput != null) chatInput.requestFocus();
     }
 
     // ---- Aria chat view ----
@@ -450,6 +460,197 @@ public class MainActivity extends Activity {
                 scrollDown();
             });
         }
+    }
+
+    // ---- Dashboard view (native: Aria fleet + notifications + local models) ----
+    private View buildDashboardView() {
+        ScrollView sv = new ScrollView(this);
+        sv.setBackgroundColor(0xFF0D1117);
+        dashBody = col();
+        dashBody.setPadding(dp(14), dp(12), dp(14), dp(20));
+        sv.addView(dashBody);
+        return sv;
+    }
+
+    private void refreshDashboard() {
+        if (dashBody == null) return;
+        dashBody.removeAllViews();
+        dashBody.addView(hint("Loading…"));
+        new Thread(() -> {
+            String devs = tryGet("/api/devices");
+            String notifs = tryGet("/api/notifications?limit=40");
+            String models = tryGet("/api/models");
+            runOnUiThread(() -> renderDashboard(devs, notifs, models));
+        }, "dash-refresh").start();
+    }
+
+    private String tryGet(String path) {
+        try { return Api.get(store, path); } catch (Exception e) { return "ERR:" + e.getMessage(); }
+    }
+
+    private void renderDashboard(String devsJson, String notifsJson, String modelsJson) {
+        dashBody.removeAllViews();
+
+        LinearLayout head = new LinearLayout(this);
+        head.setOrientation(LinearLayout.HORIZONTAL);
+        head.setGravity(Gravity.CENTER_VERTICAL);
+        TextView h = title("Dashboard");
+        h.setLayoutParams(new LinearLayout.LayoutParams(0, -2, 1f));
+        head.addView(h);
+        head.addView(smallButton("↻ Refresh", v -> refreshDashboard()));
+        dashBody.addView(head);
+
+        // --- My Aria fleet ---
+        dashBody.addView(sectionLabel("My Aria fleet"));
+        try {
+            if (devsJson.startsWith("ERR:")) throw new Exception(devsJson.substring(4));
+            org.json.JSONObject o = new org.json.JSONObject(devsJson);
+            org.json.JSONArray arr = o.optJSONArray("devices");
+            String self = o.optString("self", "");
+            if (arr == null || arr.length() == 0) dashBody.addView(hint("No devices."));
+            for (int i = 0; arr != null && i < arr.length(); i++) {
+                org.json.JSONObject d = arr.getJSONObject(i);
+                boolean online = d.optBoolean("online", false);
+                String name = d.optString("name", d.optString("id", "?"));
+                String kind = d.optString("kind", "");
+                String os = d.optString("os", "");
+                boolean local = d.optBoolean("local", false) || d.optString("id").equals(self);
+                String via = d.optString("via", "");
+                int hops = d.optInt("hops", 0);
+                String reach = local ? "this PC" : (via.isEmpty() ? "direct" : "via " + via) + (hops > 0 ? " · " + hops + " hop" + (hops == 1 ? "" : "s") : "");
+                String sub = kind + (os.isEmpty() ? "" : " · " + os) + "  —  " + reach;
+                dashBody.addView(fleetRow(online, name, sub));
+            }
+        } catch (Exception e) {
+            dashBody.addView(errLine("Fleet: " + e.getMessage()));
+        }
+
+        // --- Notifications center ---
+        dashBody.addView(sectionLabel("Notifications"));
+        try {
+            if (notifsJson.startsWith("ERR:")) throw new Exception(notifsJson.substring(4));
+            org.json.JSONArray arr = new org.json.JSONObject(notifsJson).optJSONArray("notifications");
+            int shown = 0;
+            for (int i = 0; arr != null && i < arr.length() && shown < 25; i++) {
+                org.json.JSONObject n = arr.getJSONObject(i);
+                if (n.optBoolean("muted", false)) continue;
+                dashBody.addView(notifCard(n));
+                shown++;
+            }
+            if (shown == 0) dashBody.addView(hint("Nothing waiting."));
+        } catch (Exception e) {
+            dashBody.addView(errLine("Notifications: " + e.getMessage()));
+        }
+
+        // --- Local models (Ollama) ---
+        dashBody.addView(sectionLabel("Local models"));
+        try {
+            if (modelsJson.startsWith("ERR:")) throw new Exception(modelsJson.substring(4));
+            org.json.JSONObject o = new org.json.JSONObject(modelsJson);
+            if (!o.optBoolean("available", false)) {
+                dashBody.addView(hint("Ollama isn't running on the PC (no local models)."));
+            } else {
+                org.json.JSONArray arr = o.optJSONArray("models");
+                if (arr == null || arr.length() == 0) dashBody.addView(hint("No models pulled."));
+                for (int i = 0; arr != null && i < arr.length(); i++) {
+                    org.json.JSONObject m = arr.getJSONObject(i);
+                    String name = m.optString("name", "?");
+                    String params = m.optString("params", "");
+                    boolean running = m.optBoolean("running", false);
+                    String sub = (params.isEmpty() ? "" : params + "  ") + humanSize(m.optLong("size", 0)) + (running ? "  · loaded" : "");
+                    dashBody.addView(fleetRow(running, name, sub));
+                }
+            }
+        } catch (Exception e) {
+            dashBody.addView(errLine("Models: " + e.getMessage()));
+        }
+    }
+
+    private View fleetRow(boolean on, String name, String sub) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(0, dp(8), 0, dp(8));
+        TextView dot = new TextView(this);
+        dot.setText(on ? "●" : "○");
+        dot.setTextColor(on ? 0xFF3FB950 : 0xFF6B7684);
+        dot.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        dot.setPadding(0, 0, dp(10), 0);
+        row.addView(dot);
+        LinearLayout tc = new LinearLayout(this);
+        tc.setOrientation(LinearLayout.VERTICAL);
+        tc.setLayoutParams(new LinearLayout.LayoutParams(0, -2, 1f));
+        TextView t = new TextView(this); t.setText(name); t.setTextColor(0xFFE6EDF3); t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        TextView s = new TextView(this); s.setText(sub); s.setTextColor(0xFF8B98A9); s.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        tc.addView(t); tc.addView(s);
+        row.addView(tc);
+        return row;
+    }
+
+    private View notifCard(org.json.JSONObject n) {
+        final String app = n.optString("app", n.optString("device", "Notification"));
+        final String tTitle = n.optString("title", "");
+        final String text = n.optString("text", "");
+        final String code = n.optString("code", "");
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setBackgroundColor(0xFF161B22);
+        card.setPadding(dp(12), dp(10), dp(12), dp(10));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
+        lp.topMargin = dp(8);
+        card.setLayoutParams(lp);
+
+        TextView hdr = new TextView(this);
+        hdr.setText(app + (tTitle.isEmpty() ? "" : "  —  " + tTitle));
+        hdr.setTextColor(0xFF58A6FF); hdr.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        card.addView(hdr);
+        if (!text.isEmpty()) {
+            TextView body = new TextView(this);
+            body.setText(text); body.setTextColor(0xFFE6EDF3); body.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+            body.setMaxLines(4);
+            card.addView(body);
+        }
+        if (!code.isEmpty()) {
+            TextView c = new TextView(this);
+            c.setText("Code: " + code); c.setTextColor(0xFFF0883E); c.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+            c.setTextIsSelectable(true);
+            card.addView(c);
+        }
+        Button ask = smallButton("Ask Aria what to do", v -> {
+            String prompt = "This notification just arrived on my phone — " + app
+                    + (tTitle.isEmpty() ? "" : " / " + tTitle) + ": \"" + text + "\". "
+                    + "In one line tell me what it is and what to do, and if it needs a reply, draft one (don't send yet).";
+            sendToAria(prompt);
+        });
+        LinearLayout.LayoutParams ap = new LinearLayout.LayoutParams(-2, -2); ap.topMargin = dp(6);
+        ask.setLayoutParams(ap);
+        card.addView(ask);
+        return card;
+    }
+
+    private TextView errLine(String s) {
+        TextView t = new TextView(this); t.setText("⚠ " + s);
+        t.setTextColor(0xFFF0883E); t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        t.setPadding(0, dp(4), 0, dp(4));
+        return t;
+    }
+
+    private String humanSize(long b) {
+        if (b <= 0) return "";
+        String[] u = {"B", "KB", "MB", "GB", "TB"};
+        double v = b; int i = 0;
+        while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+        return String.format(Locale.US, "%.1f %s", v, u[i]);
+    }
+
+    /** Jump to the Aria tab and send a prompt (used by the dashboard's "Ask Aria" actions). */
+    private void sendToAria(String prompt) {
+        selectTab(0);
+        if (ai == null || busy) return;
+        addBubble(true, prompt);
+        ariaBubble = addBubble(false, "…");
+        setBusy(true);
+        ai.ask(prompt, allowChanges, null);
     }
 
     // ---- Fleet (PC dashboard) view ----
