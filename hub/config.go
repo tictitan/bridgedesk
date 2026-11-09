@@ -56,6 +56,16 @@ type Config struct {
 	Links         []LinkTarget `json:"links"`         // other hubs THIS machine dials out to (we become a device there)
 	Peers         []LinkTarget `json:"peers"`         // other PCs this console controls (they dial back to us)
 
+	// Identity gate: when on, LAN/internet clients must ALSO present a Google ID token
+	// whose verified email is in GoogleEmails (the access key still applies — defense in depth).
+	// This is how "only my Google account(s) can connect" is enforced. Off by default.
+	RequireGoogle bool     `json:"requireGoogle"`
+	GoogleEmails  []string `json:"googleEmails"`  // allowed verified emails (lower-cased on check)
+	GoogleClients []string `json:"googleClients"` // optional accepted `aud` client IDs; empty = any Google client
+
+	// Mailboxes Aria can read/help with from the phone (Gmail + Outlook/Microsoft 365).
+	EmailAccounts []EmailAccount `json:"emailAccounts"`
+
 	mu   sync.Mutex
 	path string
 }

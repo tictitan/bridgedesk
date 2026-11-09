@@ -2,5 +2,6 @@
 android/build/
 android/*.keystore
 android/BridgeDesk.apk
+android/BridgeDesk.apk.idsig
 *.log
 android/keystore.pass

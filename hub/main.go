@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"strings"
 	"sync"
 	"syscall"
 )
@@ -56,6 +57,88 @@ func main() {
 			cfg.Save()
 			fmt.Println("new access key:", cfg.AccessKey)
 			return
+		case "google":
+			// bridgedesk google on <email>[,<email2>...]   |   google off   |   google status
+			attachParentConsole()
+			cfg, _ := loadConfig()
+			sub := ""
+			if len(os.Args) > 2 {
+				sub = os.Args[2]
+			}
+			switch sub {
+			case "on":
+				if len(os.Args) > 3 {
+					if list, ok := strList(os.Args[3]); ok {
+						cfg.GoogleEmails = list
+					}
+				}
+				if len(cfg.GoogleEmails) == 0 {
+					fmt.Println("usage: bridgedesk google on you@gmail.com[,other@domain]")
+					return
+				}
+				cfg.RequireGoogle = true
+				cfg.Save()
+				fmt.Printf("Google sign-in REQUIRED. Allowed: %s\n", strings.Join(cfg.GoogleEmails, ", "))
+			case "off":
+				cfg.RequireGoogle = false
+				cfg.Save()
+				fmt.Println("Google sign-in requirement OFF (access key + TLS pin still apply).")
+			default:
+				fmt.Printf("Google sign-in: %v\nAllowed emails: %s\nAccepted client IDs: %s\n",
+					cfg.RequireGoogle, strings.Join(cfg.GoogleEmails, ", "), strings.Join(cfg.GoogleClients, ", "))
+			}
+			return
+		case "email":
+			// bridgedesk email add-gmail <clientId> [secret] | add-outlook <clientId> [secret]
+			//                 list | remove <email>
+			attachParentConsole()
+			cfg, _ := loadConfig()
+			sub, a1, a2 := argAt(2), argAt(3), argAt(4)
+			switch sub {
+			case "add-gmail", "add-outlook":
+				var acc *EmailAccount
+				var err error
+				if sub == "add-gmail" {
+					acc, err = enrollGmail(a1, a2)
+				} else {
+					acc, err = enrollOutlook(a1, a2)
+				}
+				if err != nil {
+					fmt.Println("error:", err)
+					return
+				}
+				// replace an existing entry for the same mailbox, else append
+				replaced := false
+				for i := range cfg.EmailAccounts {
+					if strings.EqualFold(cfg.EmailAccounts[i].Email, acc.Email) {
+						cfg.EmailAccounts[i] = *acc
+						replaced = true
+					}
+				}
+				if !replaced {
+					cfg.EmailAccounts = append(cfg.EmailAccounts, *acc)
+				}
+				cfg.Save()
+				fmt.Printf("connected %s mailbox: %s\n", acc.Provider, acc.Email)
+			case "remove":
+				kept := cfg.EmailAccounts[:0]
+				for _, e := range cfg.EmailAccounts {
+					if !strings.EqualFold(e.Email, a1) {
+						kept = append(kept, e)
+					}
+				}
+				cfg.EmailAccounts = kept
+				cfg.Save()
+				fmt.Println("removed", a1)
+			default:
+				if len(cfg.EmailAccounts) == 0 {
+					fmt.Println("no mail accounts. add one:\n  bridgedesk email add-gmail <clientId> [clientSecret]\n  bridgedesk email add-outlook <clientId> [clientSecret]")
+				}
+				for _, e := range cfg.EmailAccounts {
+					fmt.Printf("  %s (%s)\n", e.Email, e.Provider)
+				}
+			}
+			return
 		case "-h", "--help", "help":
 			attachParentConsole()
 			fmt.Println(helpText)
@@ -104,6 +187,13 @@ func main() {
 
 	<-done
 	log.Println("shutting down")
+}
+
+func argAt(i int) string {
+	if len(os.Args) > i {
+		return os.Args[i]
+	}
+	return ""
 }
 
 func fatal(err error) {

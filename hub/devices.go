@@ -22,8 +22,14 @@ type DeviceInfo struct {
 	Extra    any      `json:"extra,omitempty"`
 	HomeDir  string   `json:"home,omitempty"`
 	Platform string   `json:"platform,omitempty"`
-	Via      string   `json:"via,omitempty"` // name of the hub that owns this device (for relayed devices)
+	Via      string   `json:"via,omitempty"`  // name of the hub that owns this device (for relayed devices)
+	Hops     int      `json:"hops,omitempty"` // 0 = owned by this hub; +1 for each mesh hop to reach it
 }
+
+// A relay is advertised at most this many hops out, and forwarded at most this many hops,
+// so a chain of hubs (my PC -> a PC it can reach -> one only that PC can reach) works while loops stay bounded.
+const maxAdvertiseHops = 5
+const maxRelayHops = 8
 
 // Event is pushed asynchronously by a device (terminal output, screen frames, notifications).
 type Event struct {
@@ -166,19 +172,80 @@ func (h *Hub) getOwned(id string) Device {
 	return nil
 }
 
-// Get resolves any device in the fleet: owned first, else a relay through the peer that owns it.
+// route picks the best peer to reach a device NOT owned here: the one advertising it with the fewest hops,
+// skipping any hub in `avoid` (the hops already on the path, so a relay never loops back through them).
+func (h *Hub) route(id string, avoid map[string]bool) (*PeerHub, DeviceInfo, bool) {
+	var bestPeer *PeerHub
+	var bestInfo DeviceInfo
+	found := false
+	for _, p := range h.peerList() {
+		if avoid[p.id] {
+			continue
+		}
+		if info, ok := p.has(id); ok {
+			if !found || info.Hops < bestInfo.Hops {
+				bestPeer, bestInfo, found = p, info, true
+			}
+		}
+	}
+	return bestPeer, bestInfo, found
+}
+
+// Get resolves any device in the fleet: owned first, else a relay through the best (fewest-hop) peer that can
+// reach it — which may itself forward the call another hop, so machines you can't reach directly are still driven.
 func (h *Hub) Get(id string) (Device, error) {
 	if d := h.getOwned(id); d != nil {
 		return d, nil
 	}
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	for _, p := range h.peers {
-		if info, ok := p.has(id); ok {
-			return &RelayDevice{peer: p, info: info}, nil
-		}
+	if p, info, ok := h.route(id, nil); ok {
+		return &RelayDevice{peer: p, info: info, ttl: maxRelayHops}, nil
 	}
 	return nil, fmt.Errorf("device %q not found or offline", id)
+}
+
+// perPeerRoster is what we advertise TO one peer: our owned devices (0 hops) plus everything reachable through
+// our OTHER peers (hops+1), capped at maxAdvertiseHops. Excluding the target peer is split-horizon — we never
+// tell a peer about a route that goes back through itself, which stops advertisement loops.
+func (h *Hub) perPeerRoster(excludeID string) []DeviceInfo {
+	best := map[string]DeviceInfo{}
+	order := []string{}
+	add := func(info DeviceInfo) {
+		if cur, ok := best[info.ID]; ok {
+			if info.Hops < cur.Hops {
+				best[info.ID] = info
+			}
+			return
+		}
+		best[info.ID] = info
+		order = append(order, info.ID)
+	}
+	for _, info := range h.ownedRoster() {
+		info.Hops = 0
+		info.Local = true
+		info.Via = ""
+		add(info)
+	}
+	for _, p := range h.peerList() {
+		if p.id == excludeID {
+			continue
+		}
+		for _, info := range p.rosterCopy() {
+			if info.Hops+1 > maxAdvertiseHops {
+				continue
+			}
+			info.Hops++
+			info.Local = false
+			if info.Via == "" {
+				info.Via = p.name
+			}
+			add(info)
+		}
+	}
+	out := make([]DeviceInfo, 0, len(order))
+	for _, id := range order {
+		out = append(out, best[id])
+	}
+	return out
 }
 
 // List returns every device in the fleet (owned + all peers' rosters), de-duplicated by ID.
@@ -245,10 +312,11 @@ func (h *Hub) ownedEvent(deviceID string, e Event) {
 	}
 }
 
+// broadcastRoster re-advertises to every peer. Each gets a split-horizon view (perPeerRoster), so reachability
+// of a device three hubs away propagates outward one hop at a time until it reaches every hub.
 func (h *Hub) broadcastRoster() {
-	roster := h.ownedRoster()
 	for _, p := range h.peerList() {
-		p.sendRoster(roster)
+		p.sendRoster(h.perPeerRoster(p.id))
 	}
 }
 

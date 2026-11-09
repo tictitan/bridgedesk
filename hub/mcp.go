@@ -235,6 +235,39 @@ func mcpTools() []map[string]any {
 				"wait":    map[string]any{"type": "integer", "description": "Seconds to wait for a new code to arrive if none is found yet (max 120)."},
 			}},
 		},
+		{
+			"name":        "email_accounts",
+			"description": "List the mail accounts (Gmail / Outlook) Aria can read and send from. Use their 'email' as the 'account' argument of the other email_* tools.",
+			"inputSchema": map[string]any{"type": "object", "properties": map[string]any{}},
+		},
+		{
+			"name":        "email_list",
+			"description": "List recent messages in a mailbox. Optional 'query' uses the provider's search (Gmail search syntax like 'is:unread from:bob', or Outlook keywords). Returns id, from, subject, date, snippet, unread.",
+			"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
+				"account": map[string]any{"type": "string", "description": "Which mailbox (its email). Omit if only one is configured."},
+				"query":   map[string]any{"type": "string", "description": "Search/filter, e.g. 'is:unread' or 'from:alice subject:invoice'."},
+				"limit":   map[string]any{"type": "integer", "description": "Max messages (default 15, max 50)."},
+			}},
+		},
+		{
+			"name":        "email_read",
+			"description": "Read one message in full (headers + plain-text body) by its id from email_list.",
+			"inputSchema": map[string]any{"type": "object", "required": []string{"id"}, "properties": map[string]any{
+				"account": map[string]any{"type": "string"},
+				"id":      map[string]any{"type": "string", "description": "Message id from email_list."},
+			}},
+		},
+		{
+			"name":        "email_send",
+			"description": "Send an email from one of the user's mailboxes. This CHANGES things — only call it once the user has approved the recipient, subject and body.",
+			"inputSchema": map[string]any{"type": "object", "required": []string{"to", "subject", "body"}, "properties": map[string]any{
+				"account": map[string]any{"type": "string", "description": "Which mailbox to send from (its email)."},
+				"to":      map[string]any{"type": "string", "description": "Recipient(s), comma-separated."},
+				"cc":      map[string]any{"type": "string", "description": "Optional Cc, comma-separated."},
+				"subject": map[string]any{"type": "string"},
+				"body":    map[string]any{"type": "string", "description": "Plain-text body."},
+			}},
+		},
 	}
 }
 
@@ -542,6 +575,30 @@ func (s *Server) mcpCallTool(ctx context.Context, req mcpReq) any {
 			return fail(err)
 		}
 		return textResult("action sent")
+
+	case "email_accounts":
+		return jsonResult(s.emailAccountList())
+
+	case "email_list":
+		res, err := s.emailList(str("account"), str("query"), intArg(args, "limit"))
+		if err != nil {
+			return fail(err)
+		}
+		return jsonResult(res)
+
+	case "email_read":
+		res, err := s.emailRead(str("account"), str("id"))
+		if err != nil {
+			return fail(err)
+		}
+		return jsonResult(res)
+
+	case "email_send":
+		res, err := s.emailSend(str("account"), str("to"), str("subject"), str("body"), str("cc"))
+		if err != nil {
+			return fail(err)
+		}
+		return jsonResult(res)
 	}
 	return mcpError(req.ID, -32602, "unknown tool: "+call.Name)
 }

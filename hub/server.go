@@ -218,6 +218,18 @@ func (s *Server) auth(h http.HandlerFunc) http.HandlerFunc {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
+		if s.cfg.RequireGoogle {
+			email, err := s.googleGate(googleToken(r))
+			if err != nil {
+				http.Error(w, "google sign-in required: "+err.Error(), http.StatusUnauthorized)
+				return
+			}
+			// Let the dashboard WebView's later same-origin requests carry the token.
+			if tok := r.URL.Query().Get("gid"); tok != "" {
+				http.SetCookie(w, &http.Cookie{Name: "aria_gid", Value: tok, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode})
+			}
+			_ = email
+		}
 		h(w, r)
 	}
 }
@@ -533,6 +545,7 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		"clipSync": !s.cfg.ClipSyncOff, "winClipHistorySupported": clipSupported, "winClipHistory": clipOn,
 		"autoCopyCodes": s.cfg.AutoCopyCodes, "notifWebhook": s.cfg.NotifWebhook, "mutedApps": s.cfg.MutedApps,
 		"fingerprint": s.fp, "autostart": autostartEnabled(), "accessKey": s.cfg.AccessKey,
+		"requireGoogle": s.cfg.RequireGoogle, "googleEmails": s.cfg.GoogleEmails, "googleClients": s.cfg.GoogleClients,
 		"addresses": ips, "primaryHost": host,
 		"elevated": isElevated(), "os": s.hub.local.Info().Kind,
 		"davUrl": fmt.Sprintf("https://%s:%d/dav/", host, s.cfg.LANPort),
@@ -577,6 +590,36 @@ func applySettings(c *Config, in map[string]any) {
 	if v, ok := in["rotateKey"].(bool); ok && v {
 		c.AccessKey = randomKey(16)
 	}
+	b("requireGoogle", &c.RequireGoogle)
+	if list, ok := strList(in["googleEmails"]); ok {
+		c.GoogleEmails = list
+	}
+	if list, ok := strList(in["googleClients"]); ok {
+		c.GoogleClients = list
+	}
+}
+
+// strList accepts a JSON array of strings or a comma/space/newline-separated string.
+func strList(v any) ([]string, bool) {
+	switch x := v.(type) {
+	case []any:
+		out := []string{}
+		for _, e := range x {
+			if s, ok := e.(string); ok && strings.TrimSpace(s) != "" {
+				out = append(out, strings.TrimSpace(s))
+			}
+		}
+		return out, true
+	case string:
+		out := []string{}
+		for _, s := range strings.FieldsFunc(x, func(r rune) bool { return r == ',' || r == ' ' || r == '\n' || r == '\t' || r == ';' }) {
+			if strings.TrimSpace(s) != "" {
+				out = append(out, strings.TrimSpace(s))
+			}
+		}
+		return out, true
+	}
+	return nil, false
 }
 
 func (s *Server) handleDav(w http.ResponseWriter, r *http.Request) {
@@ -603,6 +646,12 @@ func (s *Server) handleLink(w http.ResponseWriter, r *http.Request) {
 	if !s.keyOK(s.token(r)) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
+	}
+	if s.cfg.RequireGoogle {
+		if _, err := s.googleGate(googleToken(r)); err != nil {
+			http.Error(w, "google sign-in required: "+err.Error(), http.StatusUnauthorized)
+			return
+		}
 	}
 	conn, err := s.up.Upgrade(w, r, nil)
 	if err != nil {
@@ -635,6 +684,10 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	subs = append(subs, s.notif.Listen(func(event string, n any) {
 		send(map[string]any{"event": event, "params": n})
 	}))
+
+	// One Aria (claude CLI) turn may be in flight per connection; ai.cancel kills it.
+	ai := &aiSession{}
+	defer ai.cancel()
 
 	for {
 		var msg struct {
@@ -671,6 +724,45 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 			})
 			subs = append(subs, unsub)
 			send(map[string]any{"id": msg.ID, "result": "subscribed"})
+		case "ai.ask":
+			// Relay a phone prompt to the local Claude CLI and stream the reply back.
+			var req aiReq
+			json.Unmarshal(msg.Params, &req)
+			id := msg.ID
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+				defer cancel()
+				ai.setCancel(cancel)
+				session, text, err := s.runAI(ctx, req, func(event string, p any) {
+					send(map[string]any{"event": event, "params": p})
+				}, ai.set)
+				if err != nil {
+					send(map[string]any{"id": id, "error": err.Error(), "result": map[string]any{"session": session}})
+					return
+				}
+				send(map[string]any{"id": id, "result": map[string]any{"session": session, "text": text}})
+			}()
+		case "ai.fleet":
+			// Run the same task on every (or selected) online device as its own Claude turn.
+			var freq aiFleetReq
+			json.Unmarshal(msg.Params, &freq)
+			id := msg.ID
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 45*time.Minute)
+				defer cancel()
+				ai.setCancel(cancel)
+				devices, err := s.runFleet(ctx, freq, func(event string, p any) {
+					send(map[string]any{"event": event, "params": p})
+				})
+				if err != nil {
+					send(map[string]any{"id": id, "error": err.Error()})
+					return
+				}
+				send(map[string]any{"id": id, "result": map[string]any{"devices": devices}})
+			}()
+		case "ai.cancel":
+			ai.cancel()
+			send(map[string]any{"id": msg.ID, "result": "cancelled"})
 		}
 	}
 }
