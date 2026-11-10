@@ -35,6 +35,16 @@ func (a *approvalRegistry) create() (string, chan bool) {
 	return id, ch
 }
 
+// register adds a waiter under a caller-chosen id (used by the assistant-relay path, whose
+// approval ids come from the desktop relay) and returns its decision channel.
+func (a *approvalRegistry) register(id string) chan bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	ch := make(chan bool, 1)
+	a.wait[id] = ch
+	return ch
+}
+
 func (a *approvalRegistry) resolve(id string, allow bool) {
 	a.mu.Lock()
 	ch := a.wait[id]

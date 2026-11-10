@@ -20,11 +20,18 @@ under it (from the relay's `ai.tool` / `ai.tool.result` events), then the final 
 **capability launcher** (scrollable chips above the box) kicks off common jobs — Check fleet, Run
 on fleet, Triage email, Draft email, "What can you do?" — by sending the right prompt.
 
-Capability scope: the phone drives whatever tools the PC-side relay exposes. Today that's the
-**fleet** (`bridge_*`) and **email** (`email_*`) tools; built-in shell is denied. Reaching Aria's
-full desktop helper suite (`aria-browse`, `aria-orch`, `aria-biz`, cloud…) requires the PC side to
-give the relay Aria's helper environment — those helpers are resolved through the desktop Aria
-install, not the hub's PATH.
+Capability scope — two modes, chosen automatically by the hub:
+
+- **Full Aria (preferred):** when the PC runs the desktop Aria assistant, Aria sets
+  `ARIA_ASSISTANT_URL` / `ARIA_ASSISTANT_TOKEN` on the hub, and `ai.ask` relays the prompt to
+  Aria's own agent (every `aria-*` helper, browser, orchestrator, business) — streaming text, tool
+  activity and **real per-action approval requests** back to the phone. So the phone has Aria's
+  *full* capability.
+- **Fallback (no Aria attached):** `ai.ask` runs a local `claude -p` with the fleet (`bridge_*`)
+  and email (`email_*`) tools only; built-in shell denied.
+
+Either way the phone UI is the same (activity lines + approval cards). See
+`hub/assistant_relay.go` (relay client) and `hub/approvals.go` (fallback approvals).
 
 ### Per-action approvals
 

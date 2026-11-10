@@ -736,7 +736,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 				defer cancel()
 				ai.setCancel(cancel)
-				session, text, err := s.runAI(ctx, req, func(event string, p any) {
+				session, text, err := s.runAssistantTurn(ctx, req, func(event string, p any) {
 					send(map[string]any{"event": event, "params": p})
 				}, ai.set, approvals)
 				if err != nil {
