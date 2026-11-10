@@ -232,6 +232,12 @@ func (s *Server) runAI(ctx context.Context, req aiReq, emit func(event string, p
 					emit("ai.delta", map[string]any{"text": text})
 				}
 			}
+		case "user":
+			// tool_result coming back from a tool the model ran — surface a short snippet
+			// so the phone can show what happened ("Checking email… → 3 unread"), not just spin.
+			if s := toolResultSnippet(evt["message"]); s != "" {
+				emit("ai.tool.result", map[string]any{"text": s})
+			}
 		case "result":
 			finalText = rawStr(evt["result"])
 			var isErr bool
@@ -282,6 +288,45 @@ func assistantParts(msg json.RawMessage, emit func(string, any)) []string {
 		}
 	}
 	return texts
+}
+
+// toolResultSnippet extracts a short, human-readable snippet from a tool_result message.
+func toolResultSnippet(msg json.RawMessage) string {
+	var m struct {
+		Content []struct {
+			Type    string          `json:"type"`
+			Content json.RawMessage `json:"content"`
+			Text    string          `json:"text"`
+		} `json:"content"`
+	}
+	if json.Unmarshal(msg, &m) != nil {
+		return ""
+	}
+	for _, c := range m.Content {
+		if c.Type != "tool_result" {
+			continue
+		}
+		// content may be a string, or an array of {type:text,text:...} blocks
+		var s string
+		if json.Unmarshal(c.Content, &s) != nil {
+			var blocks []struct {
+				Type, Text string
+			}
+			if json.Unmarshal(c.Content, &blocks) == nil {
+				for _, b := range blocks {
+					if b.Type == "text" {
+						s += b.Text
+					}
+				}
+			}
+		}
+		s = strings.TrimSpace(strings.ReplaceAll(s, "\n", " "))
+		if len(s) > 160 {
+			s = s[:160] + "…"
+		}
+		return s
+	}
+	return ""
 }
 
 func rawStr(r json.RawMessage) string {

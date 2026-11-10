@@ -12,6 +12,21 @@ phone can still be shared to / controlled by your PCs — so nothing you had bef
 
 Three tabs: **Aria** (chat), **Dashboard** (native, below), **Fleet** (the PC web dashboard).
 
+### Assistant front-end
+
+The Aria chat shows the PC working as it happens: each step renders a friendly activity line
+("Checking email", "Running a command", "Taking a screenshot") with a short `→ result` snippet
+under it (from the relay's `ai.tool` / `ai.tool.result` events), then the final answer. A
+**capability launcher** (scrollable chips above the box) kicks off common jobs — Check fleet, Run
+on fleet, Triage email, Draft email, "What can you do?" — by sending the right prompt.
+
+Capability scope: the phone drives whatever tools the PC-side relay exposes. Today that's the
+**fleet** (`bridge_*`) and **email** (`email_*`) tools; built-in shell is denied. Reaching Aria's
+full desktop helper suite (`aria-browse`, `aria-orch`, `aria-biz`, cloud…) requires the PC side to
+give the relay Aria's helper environment — those helpers are resolved through the desktop Aria
+install, not the hub's PATH. Sending/changes stay gated by **Allow changes** (per-action Allow/Deny
+cards are a planned next step).
+
 ## Dashboard tab
 
 A native screen that mirrors the desktop Aria views, reading the hub over the same pinned-TLS
