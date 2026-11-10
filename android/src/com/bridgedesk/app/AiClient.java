@@ -20,6 +20,7 @@ public class AiClient {
         void onDelta(String text);          // a chunk of assistant text (single-brain chat)
         void onTool(String name);           // the assistant is running fleet tool <name>
         void onToolResult(String device, String text); // a short result snippet from a tool (device "" = single-brain)
+        void onApproval(String id, String tool, String inputJson); // PC asks Allow/Deny for a change
         void onDone(String session, String text); // turn finished; session = resume id
         void onError(String message);
         void onStatus(String status);       // "connecting", "connected", "disconnected"
@@ -97,6 +98,16 @@ public class AiClient {
 
         if (ws != null && ws.isOpen()) trySend(msg);
         else { pending = msg; connect(); }
+    }
+
+    /** Answer an approval card: allow or deny the pending change. */
+    public synchronized void approve(String id, boolean allow) {
+        if (ws == null || !ws.isOpen()) return;
+        try {
+            JSONObject params = new JSONObject().put("id", id).put("allow", allow);
+            JSONObject msg = new JSONObject().put("action", "ai.approve").put("id", ++reqId).put("params", params);
+            ws.sendText(msg.toString());
+        } catch (Exception ignored) {}
     }
 
     /** Ask the hub to kill the in-flight CLI turn. */
@@ -179,6 +190,9 @@ public class AiClient {
                 if (device.isEmpty()) listener.onTool(name); else listener.onFleetTool(device, name);
             } else if ("ai.tool.result".equals(event)) {
                 listener.onToolResult(device, p == null ? "" : p.optString("text", ""));
+            } else if ("ai.approval".equals(event)) {
+                String input = p == null || p.opt("input") == null ? "" : String.valueOf(p.opt("input"));
+                listener.onApproval(p == null ? "" : p.optString("id", ""), p == null ? "" : p.optString("tool", ""), input);
             }
             return;
         }

@@ -221,8 +221,8 @@ public class MainActivity extends Activity {
         v.addView(chatScroll);
 
         addNote("Ask Aria anything. She runs on your PC and can see your whole BridgeDesk fleet. "
-                + "Reading is free; turn on “Allow changes” before asking her to run commands, "
-                + "send messages, move files or control a device.");
+                + "Reading is free. For changes (run a command, send, move files, control a device) "
+                + "she asks you to Allow or Deny each one — or flip “Auto-approve changes” to skip the prompts this chat.");
 
         // capability launcher — horizontally scrollable chips that kick off a PC capability
         HorizontalScrollView qaScroll = new HorizontalScrollView(this);
@@ -247,7 +247,7 @@ public class MainActivity extends Activity {
         acRow.setGravity(Gravity.CENTER_VERTICAL);
         acRow.setPadding(dp(12), 0, dp(12), 0);
         TextView acl = new TextView(this);
-        acl.setText("Allow changes (run commands, send, control)");
+        acl.setText("Auto-approve changes (skip Allow/Deny prompts)");
         acl.setTextColor(0xFF8B98A9);
         acl.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
         acl.setLayoutParams(new LinearLayout.LayoutParams(0, -2, 1f));
@@ -320,7 +320,7 @@ public class MainActivity extends Activity {
         if (task.isEmpty()) { toast("Type a task first, then tap Run on fleet"); chatInput.requestFocus(); return; }
         chatInput.setText("");
         addBubble(true, "Run on every device:\n" + task);
-        if (!allowChanges) addNote("Reading only — turn on “Allow changes” for the workers to change anything.");
+        if (!allowChanges) addNote("Fleet workers run read-only (per-device approval isn't available) — turn on “Auto-approve changes” to let them change things.");
         fleetBubbles = new java.util.HashMap<>();
         setBusy(true);
         ai.askFleet(task, null, allowChanges);
@@ -432,6 +432,69 @@ public class MainActivity extends Activity {
         if (chatScroll != null) chatScroll.post(() -> chatScroll.fullScroll(View.FOCUS_DOWN));
     }
 
+    /** An Allow/Deny card for a change the PC's Aria wants to make. */
+    private void addApprovalCard(final String id, String tool, String inputJson) {
+        final LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setBackgroundColor(0xFF2A2113); // amber-ish tint
+        card.setPadding(dp(12), dp(10), dp(12), dp(10));
+        LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(-1, -2);
+        clp.topMargin = dp(8);
+        card.setLayoutParams(clp);
+
+        TextView h = new TextView(this);
+        h.setText("⚠ Approve: " + friendlyTool(tool) + "?");
+        h.setTextColor(0xFFF0883E); h.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        card.addView(h);
+        String detail = approvalDetail(inputJson);
+        if (!detail.isEmpty()) {
+            TextView d = new TextView(this);
+            d.setText(detail); d.setTextColor(0xFFE6EDF3); d.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+            d.setMaxLines(6); d.setTextIsSelectable(true);
+            card.addView(d);
+        }
+        LinearLayout btns = new LinearLayout(this);
+        btns.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(-1, -2); bp.topMargin = dp(8);
+        btns.setLayoutParams(bp);
+        final Button allow = button("Allow", true);
+        final Button deny = button("Deny", false);
+        LinearLayout.LayoutParams a = new LinearLayout.LayoutParams(0, -2, 1f); a.topMargin = 0; a.rightMargin = dp(6);
+        LinearLayout.LayoutParams dn = new LinearLayout.LayoutParams(0, -2, 1f); dn.topMargin = 0;
+        allow.setLayoutParams(a); deny.setLayoutParams(dn);
+        View.OnClickListener decide = (v) -> {
+            boolean ok = v == allow;
+            ai.approve(id, ok);
+            allow.setEnabled(false); deny.setEnabled(false);
+            h.setText((ok ? "✓ Allowed: " : "✕ Denied: ") + friendlyTool(tool));
+            h.setTextColor(ok ? 0xFF3FB950 : 0xFF8B98A9);
+        };
+        allow.setOnClickListener(decide);
+        deny.setOnClickListener(decide);
+        btns.addView(allow); btns.addView(deny);
+        card.addView(btns);
+        chatLog.addView(card);
+        scrollDown();
+    }
+
+    /** A readable one/two-liner from the pending tool's input JSON. */
+    private String approvalDetail(String inputJson) {
+        if (inputJson == null || inputJson.isEmpty() || inputJson.equals("null")) return "";
+        try {
+            org.json.JSONObject o = new org.json.JSONObject(inputJson);
+            StringBuilder sb = new StringBuilder();
+            String[] keys = {"device", "to", "cc", "subject", "command", "number", "text", "path", "content"};
+            for (String k : keys) {
+                if (o.has(k)) {
+                    String val = o.optString(k, "");
+                    if (val.length() > 240) val = val.substring(0, 240) + "…";
+                    if (!val.isEmpty()) sb.append(k).append(": ").append(val).append("\n");
+                }
+            }
+            return sb.toString().trim();
+        } catch (Exception e) { return inputJson.length() > 240 ? inputJson.substring(0, 240) + "…" : inputJson; }
+    }
+
     /** Streams one turn from the hub relay onto the chat, all on the UI thread. */
     private class ChatListener implements AiClient.Listener {
         public void onDelta(final String text) {
@@ -445,6 +508,9 @@ public class MainActivity extends Activity {
         }
         public void onTool(final String name) {
             runOnUiThread(() -> { addToolChip(name); ariaBubble = null; });
+        }
+        public void onApproval(final String id, final String tool, final String inputJson) {
+            runOnUiThread(() -> addApprovalCard(id, tool, inputJson));
         }
         public void onToolResult(final String device, final String text) {
             runOnUiThread(() -> {

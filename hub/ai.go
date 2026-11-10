@@ -25,6 +25,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 )
 
 // aiReq is the params object of an "ai.ask" message from the phone.
@@ -144,7 +145,7 @@ func aiWorkDir() string {
 
 // runAI drives the local Claude CLI for one phone turn, streaming events through emit.
 // It returns the session id to resume next turn and the final assistant text.
-func (s *Server) runAI(ctx context.Context, req aiReq, emit func(event string, params any), setCmd func(*exec.Cmd)) (string, string, error) {
+func (s *Server) runAI(ctx context.Context, req aiReq, emit func(event string, params any), setCmd func(*exec.Cmd), approvals *approvalRegistry) (string, string, error) {
 	if strings.TrimSpace(req.Prompt) == "" {
 		return req.Session, "", fmt.Errorf("empty prompt")
 	}
@@ -152,21 +153,43 @@ func (s *Server) runAI(ctx context.Context, req aiReq, emit func(event string, p
 	allowed := append([]string{}, aiReadTools...)
 	disallowed := append([]string{}, aiBuiltinDeny...)
 	if req.AllowChanges {
+		// Auto-approve every change this turn (no per-action card).
 		allowed = append(allowed, aiChangeTools...)
-	} else {
-		// Without an explicit opt-in, deny the change tools too, so the user's global
-		// config can't silently auto-approve a fleet change requested from the phone.
+	} else if approvals == nil {
+		// No per-action approval channel (e.g. fleet workers): deny change tools outright so
+		// the user's global config can't silently auto-approve one.
 		disallowed = append(disallowed, aiChangeTools...)
 	}
+	// else: a phone approval channel is available and changes weren't blanket-approved, so change
+	// tools are left neither allowed nor denied — the CLI routes each to the permission-prompt-tool,
+	// which shows an Allow/Deny card on the phone. Built-in shell etc. stay hard-denied (no card).
 
-	mcpCfg, _ := json.Marshal(map[string]any{
-		"mcpServers": map[string]any{
-			"bridgedesk": map[string]any{
-				"type": "http",
-				"url":  fmt.Sprintf("http://127.0.0.1:%d/mcp", s.cfg.LocalPort),
-			},
-		},
-	})
+	servers := map[string]any{
+		"bridgedesk": map[string]any{"type": "http", "url": fmt.Sprintf("http://127.0.0.1:%d/mcp", s.cfg.LocalPort)},
+	}
+	apprOn := false
+	if approvals != nil {
+		url, stop, err := startApprovalServer(func(tool string, input json.RawMessage) bool {
+			id, ch := approvals.create()
+			emit("ai.approval", map[string]any{"id": id, "tool": strings.TrimPrefix(tool, "mcp__bridgedesk__"), "input": input})
+			select {
+			case allow := <-ch:
+				return allow
+			case <-ctx.Done():
+				approvals.drop(id)
+				return false
+			case <-time.After(5 * time.Minute):
+				approvals.drop(id)
+				return false
+			}
+		})
+		if err == nil {
+			servers["ariaapprove"] = map[string]any{"type": "http", "url": url}
+			apprOn = true
+			defer stop()
+		}
+	}
+	mcpCfg, _ := json.Marshal(map[string]any{"mcpServers": servers})
 
 	args := []string{
 		"-p",
@@ -175,6 +198,9 @@ func (s *Server) runAI(ctx context.Context, req aiReq, emit func(event string, p
 		"--append-system-prompt", ariaMobilePersona,
 		"--strict-mcp-config",
 		"--mcp-config", string(mcpCfg),
+	}
+	if apprOn {
+		args = append(args, "--permission-prompt-tool", "mcp__ariaapprove__approve")
 	}
 	if req.Model != "" {
 		args = append(args, "--model", req.Model)
@@ -424,7 +450,7 @@ func (s *Server) runFleet(ctx context.Context, req aiFleetReq, emit func(event s
 				}
 				emit(ev, p)
 			}
-			_, text, err := s.runAI(ctx, aiReq{Prompt: scoped, AllowChanges: req.AllowChanges, Model: req.Model}, devEmit, func(*exec.Cmd) {})
+			_, text, err := s.runAI(ctx, aiReq{Prompt: scoped, AllowChanges: req.AllowChanges, Model: req.Model}, devEmit, func(*exec.Cmd) {}, nil)
 			r := res{name: d.Name, text: text}
 			done := map[string]any{"device": d.Name, "ok": err == nil}
 			if err != nil {
