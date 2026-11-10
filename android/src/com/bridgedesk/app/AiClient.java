@@ -19,6 +19,7 @@ public class AiClient {
     public interface Listener {
         void onDelta(String text);          // a chunk of assistant text (single-brain chat)
         void onTool(String name);           // the assistant is running fleet tool <name>
+        void onToolResult(String device, String text); // a short result snippet from a tool (device "" = single-brain)
         void onDone(String session, String text); // turn finished; session = resume id
         void onError(String message);
         void onStatus(String status);       // "connecting", "connected", "disconnected"
@@ -176,6 +177,8 @@ public class AiClient {
             } else if ("ai.tool".equals(event)) {
                 String name = p == null ? "" : p.optString("name", "");
                 if (device.isEmpty()) listener.onTool(name); else listener.onFleetTool(device, name);
+            } else if ("ai.tool.result".equals(event)) {
+                listener.onToolResult(device, p == null ? "" : p.optString("text", ""));
             }
             return;
         }

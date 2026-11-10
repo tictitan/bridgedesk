@@ -224,16 +224,22 @@ public class MainActivity extends Activity {
                 + "Reading is free; turn on “Allow changes” before asking her to run commands, "
                 + "send messages, move files or control a device.");
 
-        // fleet quick actions
+        // capability launcher — horizontally scrollable chips that kick off a PC capability
+        HorizontalScrollView qaScroll = new HorizontalScrollView(this);
+        qaScroll.setHorizontalScrollBarEnabled(false);
         LinearLayout qa = new LinearLayout(this);
         qa.setOrientation(LinearLayout.HORIZONTAL);
         qa.setPadding(dp(10), dp(2), dp(10), dp(2));
-        Button checkBtn = smallButton("Check fleet", x -> onCheckFleet());
-        Button runBtn = smallButton("Run on fleet…", x -> onRunFleet());
-        qa.addView(checkBtn);
-        qa.addView(space(6));
-        qa.addView(runBtn);
-        v.addView(qa);
+        qa.addView(capChip("Check fleet", x -> onCheckFleet()));
+        qa.addView(capChip("Run on fleet…", x -> onRunFleet()));
+        qa.addView(capChip("Triage email", x -> sendToAria(
+                "Go through my unread email across all my accounts and give me a short list of what needs a reply, most important first.")));
+        qa.addView(capChip("Draft email", x -> sendToAria(
+                "Help me send an email. Ask me the recipient and the gist, draft it, and show it to me before sending.")));
+        qa.addView(capChip("What can you do?", x -> sendToAria(
+                "Briefly, what can you do for me from here right now — list your main capabilities as short bullets.")));
+        qaScroll.addView(qa);
+        v.addView(qaScroll);
 
         // allow-changes row
         LinearLayout acRow = new LinearLayout(this);
@@ -368,7 +374,7 @@ public class MainActivity extends Activity {
 
     private void addToolChip(String name) {
         TextView t = new TextView(this);
-        t.setText("⚙ " + name);
+        t.setText("⚙ " + friendlyTool(name));
         t.setTextColor(0xFF8B98A9);
         t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
@@ -376,6 +382,50 @@ public class MainActivity extends Activity {
         t.setLayoutParams(lp);
         chatLog.addView(t);
         scrollDown();
+    }
+
+    /** A short "result" line under a tool chip (what the tool returned). */
+    private void addResultLine(String text) {
+        if (text == null || text.isEmpty()) return;
+        TextView t = new TextView(this);
+        t.setText("   → " + text);
+        t.setTextColor(0xFF6B7684);
+        t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
+        lp.leftMargin = dp(8);
+        t.setLayoutParams(lp);
+        chatLog.addView(t);
+        scrollDown();
+    }
+
+    /** Map a raw tool name to a human phrase for the activity line. */
+    private String friendlyTool(String name) {
+        if (name == null) return "working";
+        switch (name) {
+            case "bridge_list_devices": return "Listing your devices";
+            case "bridge_list_files":   return "Browsing files";
+            case "bridge_read_file":    return "Reading a file";
+            case "bridge_write_file":   return "Writing a file";
+            case "bridge_transfer":     return "Transferring a file";
+            case "bridge_run":          return "Running a command";
+            case "bridge_screenshot":   return "Taking a screenshot";
+            case "bridge_input":        return "Controlling a device";
+            case "bridge_clipboard":    return "Using the clipboard";
+            case "bridge_phone":        return "Calls & texts";
+            case "bridge_notifications": case "bridge_notification_history": return "Checking notifications";
+            case "bridge_notification_action": return "Acting on a notification";
+            case "bridge_latest_code":  return "Reading a 2FA code";
+            case "bridge_shares": case "bridge_share_create": case "bridge_share_mount": return "File shares";
+            case "email_accounts":      return "Listing mailboxes";
+            case "email_list":          return "Checking email";
+            case "email_read":          return "Reading an email";
+            case "email_send":          return "Sending an email";
+            case "ToolSearch":          return "Finding the right tool";
+            default:
+                if (name.startsWith("email_")) return "Email";
+                if (name.startsWith("bridge_")) return "Fleet";
+                return name;
+        }
     }
 
     private void scrollDown() {
@@ -395,6 +445,12 @@ public class MainActivity extends Activity {
         }
         public void onTool(final String name) {
             runOnUiThread(() -> { addToolChip(name); ariaBubble = null; });
+        }
+        public void onToolResult(final String device, final String text) {
+            runOnUiThread(() -> {
+                if (device == null || device.isEmpty()) addResultLine(text);
+                else { TextView b = fleetBody(device); String cur = b.getText().toString(); if (cur.equals("…")) cur = ""; b.setText((cur.isEmpty() ? "" : cur + "\n") + "→ " + text); scrollDown(); }
+            });
         }
         public void onDone(final String session, final String text) {
             runOnUiThread(() -> {
@@ -435,7 +491,7 @@ public class MainActivity extends Activity {
                 TextView b = fleetBody(device);
                 String cur = b.getText().toString();
                 if (cur.equals("…")) cur = "";
-                b.setText((cur.isEmpty() ? "" : cur + "\n") + "⚙ " + name);
+                b.setText((cur.isEmpty() ? "" : cur + "\n") + "⚙ " + friendlyTool(name));
                 scrollDown();
             });
         }
@@ -991,6 +1047,12 @@ public class MainActivity extends Activity {
         b.setOnClickListener(l); return b;
     }
     private View space(int w) { View v = new View(this); v.setLayoutParams(new LinearLayout.LayoutParams(dp(w), 1)); return v; }
+    private Button capChip(String t, View.OnClickListener l) {
+        Button b = smallButton(t, l);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2); lp.rightMargin = dp(6);
+        b.setLayoutParams(lp);
+        return b;
+    }
     private View toggleRow(String label, boolean on, final BoolSetter setter) {
         LinearLayout row = new LinearLayout(this); row.setOrientation(LinearLayout.HORIZONTAL); row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(0, dp(10), 0, dp(10));
