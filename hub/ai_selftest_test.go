@@ -30,7 +30,7 @@ func TestAISelftest(t *testing.T) {
 				deltas = append(deltas, m["text"].(string))
 			}
 		}
-	}, func(*exec.Cmd) {})
+	}, func(*exec.Cmd) {}, nil)
 	if err != nil {
 		t.Fatalf("runAI error: %v", err)
 	}

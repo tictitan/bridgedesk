@@ -24,8 +24,18 @@ Capability scope: the phone drives whatever tools the PC-side relay exposes. Tod
 **fleet** (`bridge_*`) and **email** (`email_*`) tools; built-in shell is denied. Reaching Aria's
 full desktop helper suite (`aria-browse`, `aria-orch`, `aria-biz`, cloud…) requires the PC side to
 give the relay Aria's helper environment — those helpers are resolved through the desktop Aria
-install, not the hub's PATH. Sending/changes stay gated by **Allow changes** (per-action Allow/Deny
-cards are a planned next step).
+install, not the hub's PATH.
+
+### Per-action approvals
+
+By default, when the PC's Aria wants to make a **change** (run a command, send an email, control a
+device, move files…), it does *not* just do it — the phone shows an **Allow / Deny card** for that
+specific action (with the command/recipient/path shown), and the model proceeds only if you tap
+Allow. This uses the Claude CLI's `--permission-prompt-tool`: the relay starts a per-turn approval
+MCP server (`hub/approvals.go`) that blocks on your decision (`ai.approval` → you → `ai.approve`).
+Built-in shell and other escape tools are always hard-denied (no card). Flip **Auto-approve
+changes** to skip the prompts for the current chat. Reads never prompt. Fleet "Run on fleet" workers
+stay read-only unless Auto-approve is on (they have no per-device card yet).
 
 ## Dashboard tab
 

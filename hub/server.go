@@ -689,6 +689,8 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	// One Aria (claude CLI) turn may be in flight per connection; ai.cancel kills it.
 	ai := &aiSession{}
 	defer ai.cancel()
+	// Per-connection approval channel: the phone answers ai.approval cards with ai.approve.
+	approvals := newApprovalRegistry()
 
 	for {
 		var msg struct {
@@ -736,7 +738,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 				ai.setCancel(cancel)
 				session, text, err := s.runAI(ctx, req, func(event string, p any) {
 					send(map[string]any{"event": event, "params": p})
-				}, ai.set)
+				}, ai.set, approvals)
 				if err != nil {
 					send(map[string]any{"id": id, "error": err.Error(), "result": map[string]any{"session": session}})
 					return
@@ -764,6 +766,14 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		case "ai.cancel":
 			ai.cancel()
 			send(map[string]any{"id": msg.ID, "result": "cancelled"})
+		case "ai.approve":
+			// Phone's answer to an ai.approval card: {id, allow}.
+			var d struct {
+				ID    string `json:"id"`
+				Allow bool   `json:"allow"`
+			}
+			json.Unmarshal(msg.Params, &d)
+			approvals.resolve(d.ID, d.Allow)
 		}
 	}
 }
