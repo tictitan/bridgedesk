@@ -169,6 +169,7 @@ func (s *Server) routes() {
 	m.HandleFunc("/api/download", s.auth(s.handleDownload))
 	m.HandleFunc("/api/upload", s.auth(s.handleUpload))
 	m.HandleFunc("/api/settings", s.auth(s.handleSettings))
+	m.HandleFunc("/api/models", s.auth(s.handleModels))
 	m.HandleFunc("/api/notifications", s.auth(s.handleNotifications))
 	m.HandleFunc("/api/clipboard", s.auth(s.handleClipboard))
 	m.HandleFunc("/api/links", s.auth(s.handleLinks))

@@ -10,6 +10,23 @@ this phone) while answering.
 The app still does everything BridgeDesk did — the **Fleet** tab is the PC dashboard, and the
 phone can still be shared to / controlled by your PCs — so nothing you had before is lost.
 
+Three tabs: **Aria** (chat), **Dashboard** (native, below), **Fleet** (the PC web dashboard).
+
+## Dashboard tab
+
+A native screen that mirrors the desktop Aria views, reading the hub over the same pinned-TLS
+`/api/*` endpoints (`Api.java`), reads-only:
+
+- **My Aria fleet** — every machine/phone in the mesh with an online/offline dot and how it's
+  reached (this PC, direct, or *via &lt;hub&gt; · N hops*). From `/api/devices`.
+- **Notifications** — what's waiting (messages, codes, alerts), each card with an **"Ask Aria what
+  to do"** button that jumps to the chat and asks Aria for a one-line what-to-do + a drafted reply
+  (nothing is sent — sending stays gated by *Allow changes*). From `/api/notifications`.
+- **Local models** — the PC's Ollama models with a loaded/idle dot, or a note if Ollama isn't
+  running. From a new hub endpoint `/api/models` (proxies `127.0.0.1:11434`; read-only).
+
+Tap **↻ Refresh** to re-pull. Everything here is a read; the dashboard never changes a device.
+
 ```
  Phone                         PC (hub + Claude CLI)
  ┌───────────────┐   wss /ws   ┌──────────────────────────────┐
