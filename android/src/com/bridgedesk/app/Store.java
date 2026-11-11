@@ -54,6 +54,22 @@ public class Store {
         sp.edit().remove("gRefresh").remove("gIdToken").remove("gIdExp").remove("gEmail").apply();
     }
 
+    // ---- Standalone on-device assistant (direct Anthropic API) ----
+    /** Store the Anthropic API key encrypted via the Android Keystore (ciphertext only). */
+    public void setApiKey(String plain) {
+        try {
+            if (plain == null || plain.isEmpty()) { sp.edit().remove("anthEnc").apply(); return; }
+            sp.edit().putString("anthEnc", SecureKey.encrypt(plain.trim())).apply();
+        } catch (Exception ignored) {}
+    }
+    public String apiKey() { return SecureKey.decrypt(sp.getString("anthEnc", "")); }
+    public boolean hasApiKey() { return !sp.getString("anthEnc", "").isEmpty(); }
+    public String model() { return sp.getString("anthModel", "claude-sonnet-5-5"); }
+    public void setModel(String m) { sp.edit().putString("anthModel", m).apply(); }
+    /** "auto" | "standalone" | "connected" */
+    public String mode() { return sp.getString("asstMode", "auto"); }
+    public void setMode(String m) { sp.edit().putString("asstMode", m).apply(); }
+
     public String deviceId() {
         String id = sp.getString("deviceId", null);
         if (id == null) {

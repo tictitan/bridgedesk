@@ -33,6 +33,29 @@ Capability scope — two modes, chosen automatically by the hub:
 Either way the phone UI is the same (activity lines + approval cards). See
 `hub/assistant_relay.go` (relay client) and `hub/approvals.go` (fallback approvals).
 
+### Standalone mode — the phone's own Claude (no PC needed)
+
+The app can also run **entirely on the phone**, talking to the Anthropic API directly — useful when
+no PC is reachable. Set it up in ⚙ → Phone access → **Assistant**: paste an Anthropic API key (stored
+encrypted in the Android Keystore via `SecureKey.java` — never logged or synced), pick a model
+(Sonnet / Opus / Haiku; default `claude-sonnet-5-5`), and choose a mode:
+
+- **Auto** (default): use the PC's full Aria when a PC is paired, else the phone's own Claude.
+- **Standalone**: always on-device.
+- **Connected**: always relay to the PC.
+
+Standalone runs the Messages API tool-use loop in the app (`Anthropic.java`) with an on-device tool
+set (`StandaloneTools.java`): device info, files (read/list/write), shell, clipboard, notifications,
+SMS/calls (read + send/dial), HTTP fetch, and **web search** (Anthropic's server-side tool). It
+reuses the same activity lines and Allow/Deny approval cards as Connected mode.
+
+**Honest scope.** "Fully autonomous on the phone" means a *capable* assistant — reasoning, web
+search/fetch, and phone-native actions — **not** literally everything the desktop can do. A phone
+can't run the AWS CLI, Terraform, the desktop browser-automation, the orchestrator, or arbitrary OS
+control; those still need **Connected** mode (the PC's full Aria). Camera, location, calendar,
+contacts, and an in-app WebView browser aren't wired into Standalone yet (planned). The API key is
+sensitive: it lives only in the Keystore, and outward actions still require Allow/Deny.
+
 ### Per-action approvals
 
 By default, when the PC's Aria wants to make a **change** (run a command, send an email, control a

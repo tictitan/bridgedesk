@@ -52,6 +52,7 @@ public class MainActivity extends Activity {
 
     // ---- Aria chat ----
     private AiClient ai;
+    private Anthropic anthropic;
     private LinearLayout chatLog;
     private ScrollView chatScroll;
     private EditText chatInput;
@@ -286,7 +287,7 @@ public class MainActivity extends Activity {
     }
 
     private void onSend() {
-        if (busy) { ai.cancel(); return; }
+        if (busy) { if (ai != null) ai.cancel(); setBusy(false); return; }
         String text = chatInput.getText().toString().trim();
         if (text.isEmpty()) return;
         chatInput.setText("");
@@ -294,7 +295,60 @@ public class MainActivity extends Activity {
         ariaBubble = addBubble(false, "");
         ariaBubble.setText("…");
         setBusy(true);
-        ai.ask(text, allowChanges, null);
+        dispatch(text);
+    }
+
+    /** True when the chat should use the on-device Claude (Standalone) rather than the PC relay. */
+    private boolean effectiveStandalone() {
+        String m = store.mode();
+        if ("standalone".equals(m)) return true;
+        if ("connected".equals(m)) return false;
+        // auto: use the PC when paired; otherwise the phone's own Claude (if a key is set)
+        if (!store.host().isEmpty()) return false;
+        return store.hasApiKey();
+    }
+
+    /** Route one prompt to Standalone (on-device Claude) or Connected (PC relay). */
+    private void dispatch(String text) {
+        if (effectiveStandalone()) {
+            if (!store.hasApiKey()) {
+                if (ariaBubble != null) ariaBubble.setText("No API key yet — add your Anthropic key in ⚙ → Assistant, or pair a PC for Connected mode.");
+                ariaBubble = null; setBusy(false); return;
+            }
+            runStandalone(text);
+        } else {
+            if (store.host().isEmpty()) {
+                if (ariaBubble != null) ariaBubble.setText("Not set up — pair a PC (Connected) or add an Anthropic key for Standalone in ⚙ → Assistant.");
+                ariaBubble = null; setBusy(false); return;
+            }
+            ai.ask(text, allowChanges, null);
+        }
+    }
+
+    /** Run a turn on the phone's own Claude, wiring its events to the same chat UI + approval cards. */
+    private void runStandalone(String text) {
+        if (anthropic == null) anthropic = new Anthropic();
+        Anthropic.Gate gate = (tool, inputJson) -> {
+            if (allowChanges) return true; // Auto-approve toggle
+            final java.util.concurrent.ArrayBlockingQueue<Boolean> q = new java.util.concurrent.ArrayBlockingQueue<>(1);
+            runOnUiThread(() -> addApprovalCard(tool, inputJson, allow -> q.offer(allow)));
+            try { return q.take(); } catch (Exception e) { return false; }
+        };
+        anthropic.ask(this, store, text, new Anthropic.Listener() {
+            public void onDelta(final String t) { runOnUiThread(() -> {
+                if (ariaBubble == null) ariaBubble = addBubble(false, "");
+                String cur = ariaBubble.getText().toString(); if (cur.equals("…")) cur = "";
+                ariaBubble.setText(cur.isEmpty() ? t : cur + "\n" + t); scrollDown(); }); }
+            public void onTool(final String name) { runOnUiThread(() -> { addToolChip(name); ariaBubble = null; }); }
+            public void onToolResult(final String t) { runOnUiThread(() -> addResultLine(t)); }
+            public void onDone(final String t) { runOnUiThread(() -> {
+                if (ariaBubble != null && "…".equals(ariaBubble.getText().toString()))
+                    ariaBubble.setText(t == null || t.isEmpty() ? "(no reply)" : t);
+                ariaBubble = null; setBusy(false); scrollDown(); }); }
+            public void onError(final String m) { runOnUiThread(() -> {
+                if (ariaBubble != null && "…".equals(ariaBubble.getText().toString())) chatLog.removeView(ariaBubble);
+                ariaBubble = null; TextView tv = addBubble(false, "⚠ " + m); tv.setTextColor(0xFFF0883E); setBusy(false); }); }
+        }, gate);
     }
 
     private void setBusy(boolean b) {
@@ -421,6 +475,19 @@ public class MainActivity extends Activity {
             case "email_read":          return "Reading an email";
             case "email_send":          return "Sending an email";
             case "ToolSearch":          return "Finding the right tool";
+            // standalone on-device tools
+            case "device_info":   return "Checking the phone";
+            case "list_files":    return "Browsing files";
+            case "read_file":     return "Reading a file";
+            case "write_file":    return "Writing a file";
+            case "run_sh":        return "Running a command";
+            case "get_clipboard": case "set_clipboard": return "Using the clipboard";
+            case "list_notifications": return "Checking notifications";
+            case "sms_threads": case "call_log": return "Reading messages/calls";
+            case "send_sms":      return "Sending a text";
+            case "dial":          return "Placing a call";
+            case "http_get":      return "Fetching a page";
+            case "web_search":    return "Searching the web";
             default:
                 if (name.startsWith("email_")) return "Email";
                 if (name.startsWith("bridge_")) return "Fleet";
@@ -432,8 +499,10 @@ public class MainActivity extends Activity {
         if (chatScroll != null) chatScroll.post(() -> chatScroll.fullScroll(View.FOCUS_DOWN));
     }
 
-    /** An Allow/Deny card for a change the PC's Aria wants to make. */
-    private void addApprovalCard(final String id, String tool, String inputJson) {
+    interface Decision { void decide(boolean allow); }
+
+    /** An Allow/Deny card for a change the assistant wants to make (connected or standalone). */
+    private void addApprovalCard(String tool, String inputJson, final Decision onDecide) {
         final LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
         card.setBackgroundColor(0xFF2A2113); // amber-ish tint
@@ -464,7 +533,7 @@ public class MainActivity extends Activity {
         allow.setLayoutParams(a); deny.setLayoutParams(dn);
         View.OnClickListener decide = (v) -> {
             boolean ok = v == allow;
-            ai.approve(id, ok);
+            onDecide.decide(ok);
             allow.setEnabled(false); deny.setEnabled(false);
             h.setText((ok ? "✓ Allowed: " : "✕ Denied: ") + friendlyTool(tool));
             h.setTextColor(ok ? 0xFF3FB950 : 0xFF8B98A9);
@@ -510,7 +579,7 @@ public class MainActivity extends Activity {
             runOnUiThread(() -> { addToolChip(name); ariaBubble = null; });
         }
         public void onApproval(final String id, final String tool, final String inputJson) {
-            runOnUiThread(() -> addApprovalCard(id, tool, inputJson));
+            runOnUiThread(() -> addApprovalCard(tool, inputJson, allow -> ai.approve(id, allow)));
         }
         public void onToolResult(final String device, final String text) {
             runOnUiThread(() -> {
@@ -768,11 +837,11 @@ public class MainActivity extends Activity {
     /** Jump to the Aria tab and send a prompt (used by the dashboard's "Ask Aria" actions). */
     private void sendToAria(String prompt) {
         selectTab(0);
-        if (ai == null || busy) return;
+        if (busy) return;
         addBubble(true, prompt);
         ariaBubble = addBubble(false, "…");
         setBusy(true);
-        ai.ask(prompt, allowChanges, null);
+        dispatch(prompt);
     }
 
     // ---- Fleet (PC dashboard) view ----
@@ -829,6 +898,28 @@ public class MainActivity extends Activity {
         c.setBackgroundColor(0xFF0D1117);
         c.addView(title("Let the PC use this phone"));
         c.addView(hint("Turn these on so your PC (and Claude) can view and control this phone. You can stop anytime from the notification."));
+
+        // --- Assistant: Standalone (on-device Claude) vs Connected (PC relay) ---
+        c.addView(sectionLabel("Assistant mode"));
+        c.addView(hint("Auto uses your PC's full Aria when paired, else the phone's own Claude. Standalone runs on-device (needs an Anthropic key). Connected always relays to the PC."));
+        c.addView(segmented(new String[]{"auto", "standalone", "connected"}, new String[]{"Auto", "Standalone", "Connected"},
+                store.mode(), m -> { store.setMode(m); showAgentPanel(); }));
+
+        c.addView(sectionLabel("On-device Claude (Standalone)"));
+        c.addView(hint(store.hasApiKey() ? "Anthropic API key is set (stored in the Android Keystore)."
+                : "Paste an Anthropic API key to let the phone run Claude by itself. It's encrypted in the Android Keystore — never logged or synced."));
+        final EditText apiKey = field("Anthropic API key (sk-ant-…)", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        c.addView(apiKey);
+        c.addView(actionRow("Save API key", "Encrypts and stores it on this phone only.", "Save", v -> {
+            String k = apiKey.getText().toString().trim();
+            if (k.isEmpty()) { toast("Enter a key first"); return; }
+            store.setApiKey(k); apiKey.setText(""); toast("Key saved"); showAgentPanel();
+        }));
+        if (store.hasApiKey())
+            c.addView(actionRow("Forget API key", "Remove the stored key from this phone.", "Forget", v -> { store.setApiKey(""); toast("Key removed"); showAgentPanel(); }));
+        c.addView(hint("Model"));
+        c.addView(segmented(new String[]{"claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-5-5"},
+                new String[]{"Sonnet", "Opus", "Haiku"}, store.model(), m -> { store.setModel(m); showAgentPanel(); }));
 
         // --- Google sign-in (needed when the hub requires it, e.g. over the internet) ---
         c.addView(sectionLabel("Google account"));
@@ -1113,6 +1204,23 @@ public class MainActivity extends Activity {
         b.setOnClickListener(l); return b;
     }
     private View space(int w) { View v = new View(this); v.setLayoutParams(new LinearLayout.LayoutParams(dp(w), 1)); return v; }
+    interface Pick { void pick(String value); }
+    /** A row of small buttons acting as a single-choice selector; the current value is highlighted. */
+    private View segmented(String[] values, String[] labels, String current, final Pick onPick) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setPadding(0, dp(4), 0, dp(4));
+        for (int i = 0; i < values.length; i++) {
+            final String val = values[i];
+            Button b = smallButton(labels[i], v -> { if (!val.equals(current)) onPick.pick(val); });
+            b.setBackgroundColor(val.equals(current) ? 0xFF2D6FD6 : 0xFF1C2230);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, -2, 1f);
+            if (i < values.length - 1) lp.rightMargin = dp(6);
+            b.setLayoutParams(lp);
+            row.addView(b);
+        }
+        return row;
+    }
     private Button capChip(String t, View.OnClickListener l) {
         Button b = smallButton(t, l);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2); lp.rightMargin = dp(6);
