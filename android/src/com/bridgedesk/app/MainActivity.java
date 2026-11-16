@@ -76,7 +76,7 @@ public class MainActivity extends Activity {
         setContentView(rootView);
         requestRuntimePerms();
         if (handlePairLink(getIntent())) return;         // scanned QR → connect straight away
-        if (store.host().isEmpty()) showSetup(); else showDashboard();
+        showDashboard();   // Aria works on this phone on its own; pairing a PC is optional
     }
 
     @Override protected void onNewIntent(Intent intent) {
@@ -112,8 +112,11 @@ public class MainActivity extends Activity {
         setup = col();
         setup.setPadding(dp(22), dp(40), dp(22), dp(22));
 
-        setup.addView(title("Aria"));
-        setup.addView(hint("Your assistant on the phone, powered by the Aria/BridgeDesk hub on your PC. On the PC, open BridgeDesk and read the access key and one of the LAN addresses — or scan the dashboard QR. To reach home from anywhere, enter your home DNS name (see “Reach it from anywhere” below)."));
+        setup.addView(title("Connect a PC (optional)"));
+        setup.addView(hint("Aria already works on this phone on its own. Pairing a PC is optional — it adds your fleet (BridgeDesk) and your PC's full desktop assistant. On the PC, open BridgeDesk and read the access key and a LAN address — or scan the dashboard QR. To reach home from anywhere, enter your home DNS name (see “Reach it from anywhere” below)."));
+        Button skip = button("Use Aria on this phone", true);
+        skip.setOnClickListener(v -> showDashboard());
+        setup.addView(skip);
 
         final EditText host = field("PC address — LAN IP or DNS name (e.g. 192.168.1.20 or myhome.duckdns.org)",
                 InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
@@ -123,7 +126,7 @@ public class MainActivity extends Activity {
         final EditText fp = field("Certificate fingerprint (optional, recommended)", InputType.TYPE_CLASS_TEXT);
         setup.addView(host); setup.addView(port); setup.addView(key); setup.addView(fp);
 
-        Button connect = button("Connect", true);
+        Button connect = button("Connect to this PC", false);
         connect.setOnClickListener(v -> {
             String h = host.getText().toString().trim();
             if (h.isEmpty()) { toast("Enter the PC address"); return; }
@@ -262,6 +265,10 @@ public class MainActivity extends Activity {
             try { requestPermissions(new String[]{"android.permission.READ_CALENDAR"}, 9); } catch (Exception ignored) {}
             BubbleService.start(this); toast("Floating Aria is on");
         }));
+        if (store.host().isEmpty())
+            homeBody.addView(actionRow("Connect a PC (optional)", "Adds your fleet + the PC's full desktop assistant.", "Connect", v -> showSetup()));
+        else
+            homeBody.addView(actionRow("Paired PC", store.host(), "Change", v -> showSetup()));
 
         // Today — calendar
         homeBody.addView(sectionLabel("Today"));
@@ -1013,6 +1020,15 @@ public class MainActivity extends Activity {
     }
 
     private void loadDashboard() {
+        if (store.host().isEmpty()) {
+            String html = "<html><body style='font-family:sans-serif;background:#0D1117;color:#8B98A9;padding:28px'>"
+                    + "<h3 style='color:#E6EDF3'>No PC paired</h3>"
+                    + "<p>The Fleet view is your PC's BridgeDesk dashboard. Pair a PC in ⚙ → Phone access → <b>Connect a PC</b> to use it. "
+                    + "Aria itself works on this phone without it.</p></body></html>";
+            web.loadDataWithBaseURL(null, html, "text/html", "utf-8", null);
+            fleetLoaded = false; // reload once a PC is paired
+            return;
+        }
         final String base = "https://" + store.host() + ":" + store.port() + "/?key=" + Uri.encode(store.key());
         if (!store.googleConfigured()) { web.loadUrl(base); return; }
         // Fetching/refreshing the Google token may touch the network — do it off the UI thread,
