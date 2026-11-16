@@ -34,6 +34,8 @@ public class StandaloneTools {
         a.put(tool("dial", "Place a phone call. (change)", req1("number", "Phone number to dial.")));
         a.put(tool("call_log", "Recent calls.", props("limit", "integer", "Max entries (default 40).", false)));
         a.put(tool("http_get", "Fetch a URL (GET) and return the response body text.", req1("url", "https URL.")));
+        a.put(tool("read_calendar", "Upcoming calendar events (title, time, location).", props("days", "integer", "How many days ahead (default 2).", false)));
+        a.put(tool("notify_me", "Send the user a phone notification (e.g. a daily brief or reminder).", req2("title", "Short title.", "text", "Body text.")));
         // Server-side web search (Claude runs it; no local execution).
         JSONObject ws = new JSONObject();
         try { ws.put("type", "web_search_20260209").put("name", "web_search").put("max_uses", 5); } catch (Exception ignored) {}
@@ -77,11 +79,59 @@ public class StandaloneTools {
                 case "dial":          return String.valueOf(PhoneBridge.dial(ctx, in.optString("number")));
                 case "call_log":      return PhoneBridge.callLog(ctx, in.optInt("limit", 40)).toString();
                 case "http_get":      return httpGet(in.optString("url"));
+                case "read_calendar": return readCalendar(ctx, in.optInt("days", 2));
+                case "notify_me":     return notifyMe(ctx, in.optString("title", "Aria"), in.optString("text"));
                 default:              return "unknown tool: " + name;
             }
         } catch (Exception e) {
             return "error: " + (e.getMessage() == null ? e.toString() : e.getMessage());
         }
+    }
+
+    private static String readCalendar(Context ctx, int days) throws Exception {
+        if (days <= 0 || days > 31) days = 2;
+        long now = System.currentTimeMillis();
+        long end = now + days * 24L * 3600 * 1000;
+        android.net.Uri.Builder b = android.provider.CalendarContract.Instances.CONTENT_URI.buildUpon();
+        android.content.ContentUris.appendId(b, now);
+        android.content.ContentUris.appendId(b, end);
+        String[] proj = {"title", "begin", "end", "eventLocation", "allDay"};
+        JSONArray out = new JSONArray();
+        try (android.database.Cursor c = ctx.getContentResolver().query(b.build(), proj, null, null, "begin ASC")) {
+            if (c == null) return "calendar not available (grant Calendar permission)";
+            java.text.SimpleDateFormat f = new java.text.SimpleDateFormat("EEE d MMM HH:mm", java.util.Locale.getDefault());
+            while (c.moveToNext() && out.length() < 50) {
+                JSONObject e = new JSONObject();
+                e.put("title", c.getString(0));
+                e.put("start", f.format(new java.util.Date(c.getLong(1))));
+                e.put("end", f.format(new java.util.Date(c.getLong(2))));
+                String loc = c.getString(3);
+                if (loc != null && !loc.isEmpty()) e.put("location", loc);
+                if (c.getInt(4) == 1) e.put("allDay", true);
+                out.put(e);
+            }
+        } catch (SecurityException se) {
+            return "calendar permission not granted on the phone";
+        }
+        return out.length() == 0 ? "no events in the next " + days + " day(s)" : out.toString();
+    }
+
+    private static String notifyMe(Context ctx, String title, String text) {
+        android.app.NotificationManager nm = (android.app.NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
+        String ch = "aria_brief";
+        if (android.os.Build.VERSION.SDK_INT >= 26) {
+            android.app.NotificationChannel c = new android.app.NotificationChannel(ch, "Aria", android.app.NotificationManager.IMPORTANCE_DEFAULT);
+            nm.createNotificationChannel(c);
+        }
+        android.app.Notification n = new android.app.Notification.Builder(ctx, ch)
+                .setContentTitle(title)
+                .setContentText(text)
+                .setStyle(new android.app.Notification.BigTextStyle().bigText(text))
+                .setSmallIcon(android.R.drawable.ic_dialog_info)
+                .setAutoCancel(true)
+                .build();
+        nm.notify((int) (System.currentTimeMillis() & 0x7fffffff), n);
+        return "notification sent";
     }
 
     private static String httpGet(String url) throws Exception {

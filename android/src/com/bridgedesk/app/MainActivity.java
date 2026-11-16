@@ -231,6 +231,8 @@ public class MainActivity extends Activity {
         LinearLayout qa = new LinearLayout(this);
         qa.setOrientation(LinearLayout.HORIZONTAL);
         qa.setPadding(dp(10), dp(2), dp(10), dp(2));
+        qa.addView(capChip("Brief my day", x -> sendToAria(
+                "Organize my day: check my calendar (read_calendar) and current notifications, then give me a short prioritized plan and send it to me with notify_me.")));
         qa.addView(capChip("Check fleet", x -> onCheckFleet()));
         qa.addView(capChip("Run on fleet…", x -> onRunFleet()));
         qa.addView(capChip("Triage email", x -> sendToAria(
@@ -920,6 +922,24 @@ public class MainActivity extends Activity {
         c.addView(hint("Model"));
         c.addView(segmented(new String[]{"claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-5-5"},
                 new String[]{"Sonnet", "Opus", "Haiku"}, store.model(), m -> { store.setModel(m); showAgentPanel(); }));
+
+        // --- Floating Aria bubble (draw over any app) ---
+        c.addView(sectionLabel("Floating Aria (pop-up over any app)"));
+        c.addView(hint("A draggable bubble on top of everything — tap it to ask Aria anywhere, even in a game. Uses the on-device assistant above."));
+        final boolean canOverlay = Build.VERSION.SDK_INT < 23 || Settings.canDrawOverlays(this);
+        c.addView(actionRow("Floating bubble", canOverlay ? "Allowed to draw over other apps." : "Needs 'Display over other apps' permission.",
+                canOverlay ? "Start" : "Allow", v -> {
+            if (!canOverlay) {
+                try { startActivity(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + getPackageName()))); }
+                catch (Exception e) { toast("Enable 'Display over other apps' for Aria in Settings"); }
+                return;
+            }
+            try { requestPermissions(new String[]{"android.permission.READ_CALENDAR"}, 9); } catch (Exception ignored) {}
+            BubbleService.start(this);
+            toast("Floating Aria is on — tap the bubble");
+        }));
+        if (canOverlay)
+            c.addView(actionRow("Stop floating bubble", "Remove the bubble.", "Stop", v -> { BubbleService.stop(this); toast("Bubble stopped"); }));
 
         // --- Google sign-in (needed when the hub requires it, e.g. over the internet) ---
         c.addView(sectionLabel("Google account"));

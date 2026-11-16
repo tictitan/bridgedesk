@@ -56,6 +56,19 @@ control; those still need **Connected** mode (the PC's full Aria). Camera, locat
 contacts, and an in-app WebView browser aren't wired into Standalone yet (planned). The API key is
 sensitive: it lives only in the Keystore, and outward actions still require Allow/Deny.
 
+### Floating bubble — Aria on top of every app
+
+Turn on **⚙ → Phone access → Floating Aria → Start** (grant "Display over other apps" once) and a
+draggable **bubble** sits over everything. Tap it anywhere — home screen, email, a game — to expand
+a mini chat that runs the same on-device Aria (tools + Allow/Deny cards), so Aria is your go-to
+without leaving the app you're in. Drag to reposition; "Stop" from its notification removes it.
+Implemented as `BubbleService.java` (a `SYSTEM_ALERT_WINDOW` overlay foreground service).
+
+**Organize my day.** A **Brief my day** action (in the bubble and the chat launcher) has Aria read
+your **calendar** (`read_calendar`) and current notifications, build a short prioritized plan, and
+push it to you as a phone notification (`notify_me`). Grant Calendar access when prompted.
+*(Automatic scheduled check-ins — a morning brief that fires on its own — are the next step.)*
+
 ### Per-action approvals
 
 By default, when the PC's Aria wants to make a **change** (run a command, send an email, control a
