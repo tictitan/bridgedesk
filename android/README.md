@@ -56,6 +56,14 @@ control; those still need **Connected** mode (the PC's full Aria). Camera, locat
 contacts, and an in-app WebView browser aren't wired into Standalone yet (planned). The API key is
 sensitive: it lives only in the Keystore, and outward actions still require Allow/Deny.
 
+### Home — the phone Command Center
+
+The app opens on a **Home** tab that's a command center for the phone: big **Ask Aria** and **Brief
+my day** buttons, quick controls (assistant mode, start the floating bubble), **Today** (your
+calendar events for the rest of the day), **Needs attention** (current notifications), and quick-ask
+chips (triage email, summarize, remind me…). It reads the calendar and notifications directly for an
+at-a-glance view; tapping an action hands off to Aria. Tabs: **Home · Aria · Dashboard · Fleet**.
+
 ### Floating bubble — Aria on top of every app
 
 Turn on **⚙ → Phone access → Floating Aria → Start** (grant "Display over other apps" once) and a
