@@ -116,6 +116,19 @@ public class NotificationService extends NotificationListenerService {
         }
     }
 
+    /** Reply using the notification's first inline-reply action; false if it has none. */
+    boolean replyBest(String key, String text) {
+        StatusBarNotification sbn = find(key);
+        if (sbn == null) return false;
+        Notification n = sbn.getNotification();
+        if (n.actions == null) return false;
+        for (int i = 0; i < n.actions.length; i++) {
+            RemoteInput[] ris = n.actions[i].getRemoteInputs();
+            if (ris != null && ris.length > 0) return reply(key, i, text);
+        }
+        return false;
+    }
+
     boolean dismiss(String key) {
         try { cancelNotification(key); return true; } catch (Exception e) { return false; }
     }

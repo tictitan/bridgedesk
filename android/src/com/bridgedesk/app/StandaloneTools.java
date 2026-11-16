@@ -36,6 +36,7 @@ public class StandaloneTools {
         a.put(tool("http_get", "Fetch a URL (GET) and return the response body text.", req1("url", "https URL.")));
         a.put(tool("read_calendar", "Upcoming calendar events (title, time, location).", props("days", "integer", "How many days ahead (default 2).", false)));
         a.put(tool("notify_me", "Send the user a phone notification (e.g. a daily brief or reminder).", req2("title", "Short title.", "text", "Body text.")));
+        a.put(tool("notification_reply", "Reply to a messaging notification inline (e.g. WhatsApp/SMS/chat), using its own Reply action. (change)", req2("key", "Notification key from list_notifications.", "text", "The reply to send.")));
         // Server-side web search (Claude runs it; no local execution).
         JSONObject ws = new JSONObject();
         try { ws.put("type", "web_search_20260209").put("name", "web_search").put("max_uses", 5); } catch (Exception ignored) {}
@@ -46,7 +47,7 @@ public class StandaloneTools {
     static boolean isChange(String name) {
         switch (name) {
             case "write_file": case "run_sh": case "set_clipboard":
-            case "send_sms": case "dial":
+            case "send_sms": case "dial": case "notification_reply":
                 return true;
             default:
                 return false; // reads (and web_search / http_get) run free
@@ -81,6 +82,10 @@ public class StandaloneTools {
                 case "http_get":      return httpGet(in.optString("url"));
                 case "read_calendar": return readCalendar(ctx, in.optInt("days", 2));
                 case "notify_me":     return notifyMe(ctx, in.optString("title", "Aria"), in.optString("text"));
+                case "notification_reply":
+                    if (NotificationService.instance == null) return "notification access not granted on the phone";
+                    return NotificationService.instance.replyBest(in.optString("key"), in.optString("text"))
+                            ? "reply sent" : "that notification has no inline reply (try send_sms or whatsapp instead)";
                 default:              return "unknown tool: " + name;
             }
         } catch (Exception e) {

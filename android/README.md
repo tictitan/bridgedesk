@@ -64,6 +64,11 @@ calendar events for the rest of the day), **Needs attention** (current notificat
 chips (triage email, summarize, remind me…). It reads the calendar and notifications directly for an
 at-a-glance view; tapping an action hands off to Aria. Tabs: **Home · Aria · Dashboard · Fleet**.
 
+**Suggested replies.** In the Command Center's **Needs attention** list, message notifications
+(anything with an inline Reply action, e.g. WhatsApp/SMS/chat) get a **Suggest reply** button: Aria
+drafts a reply in your voice, shows it, and — once you Allow — sends it back through the app's own
+inline reply (`notification_reply` tool). Nothing is sent without your approval.
+
 ### Floating bubble — Aria on top of every app
 
 Turn on **⚙ → Phone access → Floating Aria → Start** (grant "Display over other apps" once) and a

@@ -337,7 +337,24 @@ public class MainActivity extends Activity {
                 String tx = n.optString("text", "");
                 String line = "• " + app + (tt.isEmpty() ? "" : " — " + tt) + (tx.isEmpty() ? "" : ": " + tx);
                 if (line.length() > 120) line = line.substring(0, 120) + "…";
-                homeBody.addView(homeRow(line));
+                // Does this notification support an inline reply, or look like a message?
+                boolean canReply = false;
+                org.json.JSONArray acts = n.optJSONArray("actions");
+                for (int k = 0; acts != null && k < acts.length(); k++) if (acts.optJSONObject(k) != null && acts.optJSONObject(k).optBoolean("reply", false)) canReply = true;
+                boolean msgish = canReply || n.optString("category", "").contains("msg");
+                if (msgish && !tx.isEmpty()) {
+                    final String fApp = app, fTitle = tt, fText = tx, fKey = n.optString("key", "");
+                    LinearLayout row = new LinearLayout(this);
+                    row.setOrientation(LinearLayout.HORIZONTAL);
+                    row.setGravity(Gravity.CENTER_VERTICAL);
+                    TextView tv = homeRow(line);
+                    tv.setLayoutParams(new LinearLayout.LayoutParams(0, -2, 1f));
+                    row.addView(tv);
+                    row.addView(capChip("Suggest reply", x -> suggestReply(fApp, fTitle, fText, fKey)));
+                    homeBody.addView(row);
+                } else {
+                    homeBody.addView(homeRow(line));
+                }
                 shown++;
             }
             if (shown == 0) homeBody.addView(hint("All clear."));
@@ -981,6 +998,14 @@ public class MainActivity extends Activity {
     }
 
     /** Jump to the Aria tab and send a prompt (used by the dashboard's "Ask Aria" actions). */
+    /** Ask Aria to draft a reply to a message notification and, on approval, send it inline. */
+    private void suggestReply(String app, String title, String text, String key) {
+        String prompt = "A message came in on my phone — " + app + (title.isEmpty() ? "" : " / " + title) + ": \"" + text + "\". "
+                + "Draft a short, natural reply in my voice and show it to me. If I approve, send it with "
+                + "notification_reply(key=\"" + key + "\", text=<your reply>). Don't send until I allow it.";
+        sendToAria(prompt);
+    }
+
     private void sendToAria(String prompt) {
         selectTab(1);
         if (busy) return;
