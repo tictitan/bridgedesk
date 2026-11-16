@@ -1,7 +1,7 @@
 /dist/
 android/build/
 android/*.keystore
-android/BridgeDesk.apk
-android/BridgeDesk.apk.idsig
+android/Aria.apk
+android/Aria.apk.idsig
 *.log
 android/keystore.pass

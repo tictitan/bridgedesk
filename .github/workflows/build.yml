@@ -54,7 +54,7 @@ jobs:
           export BD_VERSION_NAME="$VER.${{ github.run_number }}"
           cd android && ANDROID_SDK=$ANDROID_HOME bash build.sh
       - uses: actions/upload-artifact@v4
-        with: { name: apk, path: android/BridgeDesk.apk }
+        with: { name: apk, path: android/Aria.apk }
 
   release:
     # Publish on every push — even if the Android build failed, the PC builds still ship.
@@ -69,13 +69,13 @@ jobs:
           VER=$(sed -n 's/.*appVersion *= *"\([^"]*\)".*/\1/p' hub/config.go)
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
             echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
-            echo "name=BridgeDesk ${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+            echo "name=Aria ${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
           else
             echo "tag=v${VER}-build.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
-            echo "name=BridgeDesk ${VER} (build ${{ github.run_number }})" >> "$GITHUB_OUTPUT"
+            echo "name=Aria ${VER} (build ${{ github.run_number }})" >> "$GITHUB_OUTPUT"
           fi
           if [ "${{ needs.android.result }}" != "success" ]; then
-            echo "note=⚠️ The Android app failed to build in this run, so BridgeDesk.apk is not attached — use the APK from the previous release." >> "$GITHUB_OUTPUT"
+            echo "note=⚠️ The Android app failed to build in this run, so Aria.apk is not attached — use the APK from the previous release." >> "$GITHUB_OUTPUT"
           fi
       - uses: actions/download-artifact@v4
         with: { path: out, merge-multiple: true }
