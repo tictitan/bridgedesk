@@ -61,8 +61,9 @@ public class MainActivity extends Activity {
     private boolean allowChanges = false;
     private boolean busy = false;
     private java.util.HashMap<String, TextView> fleetBubbles;
-    private View ariaView, fleetView, dashView;
-    private Button tabAria, tabFleet, tabDash;
+    private View ariaView, fleetView, dashView, homeView;
+    private Button tabAria, tabFleet, tabDash, tabHome;
+    private LinearLayout homeBody;
     private LinearLayout dashBody;
     private boolean fleetLoaded = false;
     private boolean dashLoadedOnce = false;
@@ -163,9 +164,12 @@ public class MainActivity extends Activity {
         bar.setBackgroundColor(0xFF161B22);
         bar.setPadding(dp(8), dp(8), dp(8), dp(8));
         bar.setGravity(Gravity.CENTER_VERTICAL);
-        tabAria = smallButton("Aria", v -> selectTab(0));
-        tabDash = smallButton("Dashboard", v -> selectTab(1));
-        tabFleet = smallButton("Fleet", v -> selectTab(2));
+        tabHome = smallButton("Home", v -> selectTab(0));
+        tabAria = smallButton("Aria", v -> selectTab(1));
+        tabDash = smallButton("Dashboard", v -> selectTab(2));
+        tabFleet = smallButton("Fleet", v -> selectTab(3));
+        bar.addView(tabHome);
+        bar.addView(space(4));
         bar.addView(tabAria);
         bar.addView(space(4));
         bar.addView(tabDash);
@@ -184,29 +188,162 @@ public class MainActivity extends Activity {
 
         FrameLayout content = new FrameLayout(this);
         content.setLayoutParams(new LinearLayout.LayoutParams(-1, 0, 1f));
+        homeView = buildHomeView();
         ariaView = buildAriaView();
         dashView = buildDashboardView();
         fleetView = buildFleetView();
+        content.addView(homeView);
         content.addView(ariaView);
         content.addView(dashView);
         content.addView(fleetView);
         colv.addView(content);
 
         rootView.addView(colv);
-        selectTab(0); // Aria is home
+        selectTab(0); // Command Center is home
     }
 
     private void selectTab(int which) {
-        if (ariaView == null) return;
-        ariaView.setVisibility(which == 0 ? View.VISIBLE : View.GONE);
-        dashView.setVisibility(which == 1 ? View.VISIBLE : View.GONE);
-        fleetView.setVisibility(which == 2 ? View.VISIBLE : View.GONE);
-        tabAria.setBackgroundColor(which == 0 ? 0xFF2D6FD6 : 0xFF1C2230);
-        tabDash.setBackgroundColor(which == 1 ? 0xFF2D6FD6 : 0xFF1C2230);
-        tabFleet.setBackgroundColor(which == 2 ? 0xFF2D6FD6 : 0xFF1C2230);
-        if (which == 2 && !fleetLoaded) { fleetLoaded = true; loadDashboard(); }
-        if (which == 1 && !dashLoadedOnce) { dashLoadedOnce = true; refreshDashboard(); }
-        if (which == 0 && chatInput != null) chatInput.requestFocus();
+        if (homeView == null) return;
+        homeView.setVisibility(which == 0 ? View.VISIBLE : View.GONE);
+        ariaView.setVisibility(which == 1 ? View.VISIBLE : View.GONE);
+        dashView.setVisibility(which == 2 ? View.VISIBLE : View.GONE);
+        fleetView.setVisibility(which == 3 ? View.VISIBLE : View.GONE);
+        tabHome.setBackgroundColor(which == 0 ? 0xFF2D6FD6 : 0xFF1C2230);
+        tabAria.setBackgroundColor(which == 1 ? 0xFF2D6FD6 : 0xFF1C2230);
+        tabDash.setBackgroundColor(which == 2 ? 0xFF2D6FD6 : 0xFF1C2230);
+        tabFleet.setBackgroundColor(which == 3 ? 0xFF2D6FD6 : 0xFF1C2230);
+        if (which == 0) refreshHome();
+        if (which == 3 && !fleetLoaded) { fleetLoaded = true; loadDashboard(); }
+        if (which == 2 && !dashLoadedOnce) { dashLoadedOnce = true; refreshDashboard(); }
+        if (which == 1 && chatInput != null) chatInput.requestFocus();
+    }
+
+    // ---- Home: the phone command center ----
+    private View buildHomeView() {
+        ScrollView sv = new ScrollView(this);
+        sv.setBackgroundColor(0xFF0D1117);
+        homeBody = col();
+        homeBody.setPadding(dp(14), dp(12), dp(14), dp(20));
+        sv.addView(homeBody);
+        return sv;
+    }
+
+    private void refreshHome() {
+        if (homeBody == null) return;
+        homeBody.removeAllViews();
+
+        LinearLayout head = new LinearLayout(this);
+        head.setOrientation(LinearLayout.HORIZONTAL);
+        head.setGravity(Gravity.CENTER_VERTICAL);
+        TextView h = title("Command Center");
+        h.setLayoutParams(new LinearLayout.LayoutParams(0, -2, 1f));
+        head.addView(h);
+        head.addView(smallButton("↻", v -> refreshHome()));
+        homeBody.addView(head);
+
+        // Primary actions
+        Button ask = button("Ask Aria", true);
+        ask.setOnClickListener(v -> { selectTab(1); if (chatInput != null) chatInput.requestFocus(); });
+        homeBody.addView(ask);
+        Button brief = button("Brief my day", false);
+        brief.setOnClickListener(v -> sendToAria(
+                "Organize my day: check my calendar (read_calendar) and current notifications, then give me a short prioritized plan and send it to me with notify_me."));
+        homeBody.addView(brief);
+
+        // Quick controls
+        homeBody.addView(sectionLabel("Quick controls"));
+        homeBody.addView(hint("Assistant mode"));
+        homeBody.addView(segmented(new String[]{"auto", "standalone", "connected"}, new String[]{"Auto", "Standalone", "Connected"},
+                store.mode(), m -> { store.setMode(m); toast("Mode: " + m); }));
+        boolean canOverlay = Build.VERSION.SDK_INT < 23 || Settings.canDrawOverlays(this);
+        homeBody.addView(actionRow("Floating Aria bubble", canOverlay ? "Pop-up over any app." : "Needs 'Display over other apps'.",
+                canOverlay ? "Start" : "Allow", v -> {
+            if (!canOverlay) { try { startActivity(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + getPackageName()))); } catch (Exception e) { toast("Enable 'Display over other apps'"); } return; }
+            try { requestPermissions(new String[]{"android.permission.READ_CALENDAR"}, 9); } catch (Exception ignored) {}
+            BubbleService.start(this); toast("Floating Aria is on");
+        }));
+
+        // Today — calendar
+        homeBody.addView(sectionLabel("Today"));
+        addTodayEvents();
+
+        // Needs attention — notifications
+        homeBody.addView(sectionLabel("Needs attention"));
+        addHomeNotifications();
+
+        // Quick asks
+        homeBody.addView(sectionLabel("Quick asks"));
+        HorizontalScrollView hs = new HorizontalScrollView(this);
+        hs.setHorizontalScrollBarEnabled(false);
+        LinearLayout chips = new LinearLayout(this);
+        chips.setOrientation(LinearLayout.HORIZONTAL);
+        chips.addView(capChip("Triage email", x -> sendToAria("Go through my unread email and list what needs a reply, most important first.")));
+        chips.addView(capChip("Summarize this", x -> sendToAria("Summarize what's on my plate right now from my calendar and notifications in 3 bullets.")));
+        chips.addView(capChip("Remind me…", x -> { selectTab(1); if (chatInput != null) { chatInput.setText("Remind me to "); chatInput.requestFocus(); } }));
+        chips.addView(capChip("What can you do?", x -> sendToAria("Briefly, what can you do for me from here right now — short bullets.")));
+        hs.addView(chips);
+        homeBody.addView(hs);
+    }
+
+    private void addTodayEvents() {
+        if (Build.VERSION.SDK_INT >= 23 && checkSelfPermission("android.permission.READ_CALENDAR") != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            homeBody.addView(actionRow("Calendar", "See today's events here.", "Grant", v -> {
+                try { requestPermissions(new String[]{"android.permission.READ_CALENDAR"}, 9); } catch (Exception ignored) {}
+            }));
+            return;
+        }
+        try {
+            long now = System.currentTimeMillis();
+            java.util.Calendar cal = java.util.Calendar.getInstance();
+            cal.set(java.util.Calendar.HOUR_OF_DAY, 23); cal.set(java.util.Calendar.MINUTE, 59); cal.set(java.util.Calendar.SECOND, 59);
+            long end = cal.getTimeInMillis();
+            android.net.Uri.Builder b = android.provider.CalendarContract.Instances.CONTENT_URI.buildUpon();
+            android.content.ContentUris.appendId(b, now); android.content.ContentUris.appendId(b, end);
+            java.text.SimpleDateFormat f = new java.text.SimpleDateFormat("HH:mm", Locale.getDefault());
+            int shown = 0;
+            try (android.database.Cursor c = getContentResolver().query(b.build(), new String[]{"title", "begin", "allDay"}, null, null, "begin ASC")) {
+                while (c != null && c.moveToNext() && shown < 12) {
+                    String tt = c.getString(0);
+                    String when = c.getInt(2) == 1 ? "all day" : f.format(new java.util.Date(c.getLong(1)));
+                    homeBody.addView(homeRow("• " + when + "  " + (tt == null ? "(untitled)" : tt)));
+                    shown++;
+                }
+            }
+            if (shown == 0) homeBody.addView(hint("Nothing left on your calendar today."));
+        } catch (Exception e) {
+            homeBody.addView(hint("Couldn't read the calendar."));
+        }
+    }
+
+    private void addHomeNotifications() {
+        if (!NotificationService.isEnabled(this) || NotificationService.instance == null) {
+            homeBody.addView(actionRow("Notifications", "Let Aria see what's waiting.", "Grant", v -> openNotificationAccess()));
+            return;
+        }
+        try {
+            org.json.JSONArray a = NotificationService.instance.listJson();
+            int shown = 0;
+            for (int i = 0; a != null && i < a.length() && shown < 8; i++) {
+                org.json.JSONObject n = a.getJSONObject(i);
+                String app = n.optString("app", "");
+                String tt = n.optString("title", "");
+                String tx = n.optString("text", "");
+                String line = "• " + app + (tt.isEmpty() ? "" : " — " + tt) + (tx.isEmpty() ? "" : ": " + tx);
+                if (line.length() > 120) line = line.substring(0, 120) + "…";
+                homeBody.addView(homeRow(line));
+                shown++;
+            }
+            if (shown == 0) homeBody.addView(hint("All clear."));
+        } catch (Exception e) {
+            homeBody.addView(hint("Couldn't read notifications."));
+        }
+    }
+
+    private TextView homeRow(String s) {
+        TextView t = new TextView(this);
+        t.setText(s); t.setTextColor(0xFFE6EDF3); t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        t.setPadding(0, dp(5), 0, dp(5));
+        return t;
     }
 
     // ---- Aria chat view ----
@@ -231,6 +368,8 @@ public class MainActivity extends Activity {
         LinearLayout qa = new LinearLayout(this);
         qa.setOrientation(LinearLayout.HORIZONTAL);
         qa.setPadding(dp(10), dp(2), dp(10), dp(2));
+        qa.addView(capChip("Brief my day", x -> sendToAria(
+                "Organize my day: check my calendar (read_calendar) and current notifications, then give me a short prioritized plan and send it to me with notify_me.")));
         qa.addView(capChip("Check fleet", x -> onCheckFleet()));
         qa.addView(capChip("Run on fleet…", x -> onRunFleet()));
         qa.addView(capChip("Triage email", x -> sendToAria(
@@ -836,7 +975,7 @@ public class MainActivity extends Activity {
 
     /** Jump to the Aria tab and send a prompt (used by the dashboard's "Ask Aria" actions). */
     private void sendToAria(String prompt) {
-        selectTab(0);
+        selectTab(1);
         if (busy) return;
         addBubble(true, prompt);
         ariaBubble = addBubble(false, "…");
@@ -920,6 +1059,24 @@ public class MainActivity extends Activity {
         c.addView(hint("Model"));
         c.addView(segmented(new String[]{"claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-5-5"},
                 new String[]{"Sonnet", "Opus", "Haiku"}, store.model(), m -> { store.setModel(m); showAgentPanel(); }));
+
+        // --- Floating Aria bubble (draw over any app) ---
+        c.addView(sectionLabel("Floating Aria (pop-up over any app)"));
+        c.addView(hint("A draggable bubble on top of everything — tap it to ask Aria anywhere, even in a game. Uses the on-device assistant above."));
+        final boolean canOverlay = Build.VERSION.SDK_INT < 23 || Settings.canDrawOverlays(this);
+        c.addView(actionRow("Floating bubble", canOverlay ? "Allowed to draw over other apps." : "Needs 'Display over other apps' permission.",
+                canOverlay ? "Start" : "Allow", v -> {
+            if (!canOverlay) {
+                try { startActivity(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + getPackageName()))); }
+                catch (Exception e) { toast("Enable 'Display over other apps' for Aria in Settings"); }
+                return;
+            }
+            try { requestPermissions(new String[]{"android.permission.READ_CALENDAR"}, 9); } catch (Exception ignored) {}
+            BubbleService.start(this);
+            toast("Floating Aria is on — tap the bubble");
+        }));
+        if (canOverlay)
+            c.addView(actionRow("Stop floating bubble", "Remove the bubble.", "Stop", v -> { BubbleService.stop(this); toast("Bubble stopped"); }));
 
         // --- Google sign-in (needed when the hub requires it, e.g. over the internet) ---
         c.addView(sectionLabel("Google account"));

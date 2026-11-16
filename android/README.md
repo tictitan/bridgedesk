@@ -56,6 +56,27 @@ control; those still need **Connected** mode (the PC's full Aria). Camera, locat
 contacts, and an in-app WebView browser aren't wired into Standalone yet (planned). The API key is
 sensitive: it lives only in the Keystore, and outward actions still require Allow/Deny.
 
+### Home — the phone Command Center
+
+The app opens on a **Home** tab that's a command center for the phone: big **Ask Aria** and **Brief
+my day** buttons, quick controls (assistant mode, start the floating bubble), **Today** (your
+calendar events for the rest of the day), **Needs attention** (current notifications), and quick-ask
+chips (triage email, summarize, remind me…). It reads the calendar and notifications directly for an
+at-a-glance view; tapping an action hands off to Aria. Tabs: **Home · Aria · Dashboard · Fleet**.
+
+### Floating bubble — Aria on top of every app
+
+Turn on **⚙ → Phone access → Floating Aria → Start** (grant "Display over other apps" once) and a
+draggable **bubble** sits over everything. Tap it anywhere — home screen, email, a game — to expand
+a mini chat that runs the same on-device Aria (tools + Allow/Deny cards), so Aria is your go-to
+without leaving the app you're in. Drag to reposition; "Stop" from its notification removes it.
+Implemented as `BubbleService.java` (a `SYSTEM_ALERT_WINDOW` overlay foreground service).
+
+**Organize my day.** A **Brief my day** action (in the bubble and the chat launcher) has Aria read
+your **calendar** (`read_calendar`) and current notifications, build a short prioritized plan, and
+push it to you as a phone notification (`notify_me`). Grant Calendar access when prompted.
+*(Automatic scheduled check-ins — a morning brief that fires on its own — are the next step.)*
+
 ### Per-action approvals
 
 By default, when the PC's Aria wants to make a **change** (run a command, send an email, control a
