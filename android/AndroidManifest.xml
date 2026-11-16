@@ -1,7 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="com.bridgedesk.app"
-    android:versionCode="1" android:versionName="1.0.0">
+    package="com.bridgedesk.app">
+    <!-- versionCode / versionName are injected at build time by build.sh via aapt2, from the
+         BD_VERSION_CODE / BD_VERSION_NAME env vars. Do not hardcode them here: if set, aapt2 keeps
+         the manifest values and every build ships versionCode=1, which blocks in-place updates. -->
 
     <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="34"/>
 
