@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds a signed BridgeDesk APK with the Android command-line tools only (no Gradle).
+# Builds a signed Aria APK with the Android command-line tools only (no Gradle).
 set -euo pipefail
 
 SDK="${ANDROID_SDK:-${ANDROID_HOME:-/opt/android-sdk}}"
@@ -105,8 +105,8 @@ if [ ! -f "$KS" ] || [ -z "$PASS" ]; then
 fi
 "$APKSIGNER" sign --ks "$KS" --ks-pass "pass:$PASS" --key-pass "pass:$PASS" \
   --min-sdk-version 26 --v1-signing-enabled true --v2-signing-enabled true \
-  --out "$HERE/BridgeDesk.apk" "$OUT/apk/aligned.apk"
-"$APKSIGNER" verify --print-certs "$HERE/BridgeDesk.apk" >/dev/null && echo "signature OK"
+  --out "$HERE/Aria.apk" "$OUT/apk/aligned.apk"
+"$APKSIGNER" verify --print-certs "$HERE/Aria.apk" >/dev/null && echo "signature OK"
 
-echo "APK: $HERE/BridgeDesk.apk"
-ls -la "$HERE/BridgeDesk.apk"
+echo "APK: $HERE/Aria.apk"
+ls -la "$HERE/Aria.apk"

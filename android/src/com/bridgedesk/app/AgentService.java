@@ -212,7 +212,7 @@ public class AgentService extends Service {
 
     private void createChannel() {
         NotificationManager nm = getSystemService(NotificationManager.class);
-        NotificationChannel ch = new NotificationChannel(CHAN, "BridgeDesk", NotificationManager.IMPORTANCE_LOW);
+        NotificationChannel ch = new NotificationChannel(CHAN, "Aria", NotificationManager.IMPORTANCE_LOW);
         ch.setDescription("Keeps your phone reachable from your PC");
         nm.createNotificationChannel(ch);
     }
@@ -225,7 +225,7 @@ public class AgentService extends Service {
         Intent clip = new Intent(this, ClipSendActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         PendingIntent cp = PendingIntent.getActivity(this, 2, clip, PendingIntent.FLAG_IMMUTABLE);
         return new Notification.Builder(this, CHAN)
-                .setContentTitle("BridgeDesk")
+                .setContentTitle("Aria")
                 .setContentText(text)
                 .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
                 .setContentIntent(pi)
